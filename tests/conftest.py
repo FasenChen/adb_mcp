@@ -1,0 +1,49 @@
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from adb_mcp.config import Config
+
+SIMULATOR = Path(__file__).with_name("fake_adb.py")
+
+
+@pytest.fixture
+def fake_adb(monkeypatch, tmp_path):
+    original = asyncio.create_subprocess_exec
+    processes = []
+
+    async def create(program, *args, **kwargs):
+        if program == "fake-adb":
+            process = await original(sys.executable, str(SIMULATOR), *args, **kwargs)
+            processes.append(process)
+            return process
+        return await original(program, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    monkeypatch.setenv("FAKE_ADB_LOG", str(tmp_path / "adb.log"))
+    monkeypatch.setenv("FAKE_ADB_CONNECTED", str(tmp_path / "connected"))
+    monkeypatch.setenv("FAKE_ADB_SERIAL", "test-device")
+    monkeypatch.setenv("FAKE_ADB_MODE", "normal")
+    return processes
+
+
+@pytest.fixture
+def config(tmp_path):
+    return Config(
+        adb_path="fake-adb",
+        target={"serial": "test-device"},
+        output_directory=tmp_path / "outputs",
+        preview_max_chars_per_stream=20,
+        read_max_chars=12000,
+        command_timeout_seconds=2.0,
+        connect_timeout_seconds=2.0,
+        cleanup_timeout_seconds=1.0,
+    )
+
+
+def calls(tmp_path):
+    log = tmp_path / "adb.log"
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []

@@ -1,0 +1,12 @@
+{
+  "adb_path": "D:/platform-tools/adb.exe",
+  "target": {"host": "<TV_IP>", "port": 5555},
+  "auto_connect": true,
+  "connect_timeout_seconds": 10,
+  "command_timeout_seconds": 30,
+  "cleanup_timeout_seconds": 5,
+  "preview_max_chars_per_stream": 6000,
+  "read_max_chars": 12000,
+  "max_capture_bytes": 16777216,
+  "output_directory": "./data/command-outputs"
+}

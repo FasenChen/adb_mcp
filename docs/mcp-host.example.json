@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "adb": {
+      "command": "<ADB_MCP_PROJECT>/.venv/Scripts/python.exe",
+      "args": ["-m", "adb_mcp", "--config", "<ADB_MCP_PROJECT>/config.json"],
+      "cwd": "<ADB_MCP_PROJECT>",
+      "env": {"PYTHONUTF8": "1"}
+    }
+  }
+}

@@ -1,0 +1,149 @@
+"""Opt-in, real-device acceptance via the public MCP SDK; save local evidence."""
+
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+from adb_mcp.commands import CommandResult, OutputPage
+from adb_mcp.config import load_config
+
+COMMANDS = [
+    ["getprop", "ro.com.google.clientidbase"],
+    ["settings", "get", "global", "device_name"],
+    ["dumpsys", "display"],
+    ["settings", "get", "secure", "adb_mcp_验收 空格'\"😀"],
+]
+
+
+async def capture_process(*args: str) -> tuple[int, bytes, bytes]:
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        async with asyncio.timeout(10):
+            stdout, stderr = await process.communicate()
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.communicate()
+        raise
+    return process.returncode, stdout, stderr
+
+
+async def verify(path: Path, report_path: Path) -> None:
+    config = load_config(path)
+    code, version, _ = await capture_process(config.adb_path, "version")
+    assert code == 0
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "adb_mcp", "--config", str(path.resolve())],
+        cwd=str(Path(__file__).parents[1]),
+        env=dict(os.environ) | {"PYTHONUTF8": "1"},
+    )
+    report = {
+        "verified_at": datetime.now(UTC).isoformat(),
+        "target_serial": config.target_serial,
+        "adb_version": version.decode("utf-8", "replace"),
+        "queries": [],
+    }
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = (await session.list_tools()).tools
+            assert {tool.name for tool in tools} == {"run_adb_shell", "read_command_output"}
+            report["tool_schemas_utf8_bytes"] = len(
+                json.dumps(
+                    [tool.model_dump(mode="json", exclude_none=True) for tool in tools],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            for argv in COMMANDS:
+                response = await session.call_tool("run_adb_shell", {"argv": argv})
+                assert len(response.content) == 1
+                assert json.loads(response.content[0].text) == response.structuredContent
+                result = CommandResult.model_validate(response.structuredContent)
+                assert not response.isError and result.exit_code == 0, result.error_code
+                assert result.target_serial == config.target_serial
+                assert result.capture_complete and not result.decoding_errors
+                query = result.model_dump(exclude={"stdout", "stderr"})
+                query["return_text_chars"] = len(response.content[0].text)
+                for stream in ("stdout", "stderr"):
+                    raw = (
+                        config.output_directory / result.output_id / f"{stream}.bin"
+                    ).read_bytes()
+                    query[f"{stream}_sha256"] = hashlib.sha256(raw).hexdigest()
+                    decoded = raw.decode("utf-8")
+                    assert decoded[: config.preview_max_chars_per_stream] == getattr(result, stream)
+                report["queries"].append(query)
+    # Restart the server and reconstruct streams only from stored evidence.
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            for query in report["queries"]:
+                for stream in ("stdout", "stderr"):
+                    parts = []
+                    start = 0
+                    while True:
+                        response = await session.call_tool(
+                            "read_command_output",
+                            {
+                                "output_id": query["output_id"],
+                                "stream": stream,
+                                "start_char": start,
+                                "max_chars": config.read_max_chars,
+                            },
+                        )
+                        assert not response.isError
+                        page = OutputPage.model_validate(response.structuredContent)
+                        assert page.capture_complete and not page.decoding_errors
+                        parts.append(page.text)
+                        if page.eof:
+                            break
+                        assert page.next_char > start
+                        start = page.next_char
+                    raw = (
+                        config.output_directory / query["output_id"] / f"{stream}.bin"
+                    ).read_bytes()
+                    assert "".join(parts) == raw.decode("utf-8")
+    report["restart_pagination_verified"] = True
+    # A fixed read-only shell fixture verifies the actual remote exit-code channel.
+    # It is outside the MCP command policy and is never exposed as a tool.
+    code, stdout, stderr = await capture_process(
+        config.adb_path,
+        "-s",
+        config.target_serial,
+        "shell",
+        "-T",
+        "-n",
+        "exit 7",
+    )
+    assert code == 7 and stdout == b"" and stderr == b""
+    report["remote_exit_code_probe"] = code
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--report", type=Path, default=Path("data/device-validation.json"))
+    args = parser.parse_args()
+    asyncio.run(verify(args.config, args.report))
+
+
+if __name__ == "__main__":
+    main()
