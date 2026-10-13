@@ -44,7 +44,7 @@ def create_server(config: Config) -> FastMCP:
             now = datetime.now(UTC).isoformat()
             result = CommandResult(
                 target_serial=config.target_serial,
-                argv=argv,
+                argv=[],
                 started_at=now,
                 finished_at=now,
                 duration_ms=0,

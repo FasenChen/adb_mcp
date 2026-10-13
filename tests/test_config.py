@@ -47,3 +47,29 @@ def test_example_template_is_valid_after_host_substitution(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(template.read_text().replace("<TV_IP>", "192.0.2.1"))
     assert load_config(path).target_serial == "192.0.2.1:5555"
+
+
+@pytest.mark.parametrize("adb_path", ["./adb.exe", ".\\adb.exe", "tools/adb.exe"])
+def test_explicit_adb_path_is_relative_to_config_not_cwd(tmp_path, monkeypatch, adb_path):
+    config_directory = tmp_path / "settings"
+    working_directory = tmp_path / "working"
+    config_directory.mkdir()
+    working_directory.mkdir()
+    path = config_directory / "config.json"
+    path.write_text(json.dumps({"target": {"serial": "test"}, "adb_path": adb_path}))
+    monkeypatch.chdir(working_directory)
+    assert load_config(path).adb_path == str((config_directory / adb_path).resolve())
+
+
+@pytest.mark.parametrize("adb_path", ["adb", "adb.exe"])
+def test_bare_adb_command_keeps_path_lookup(tmp_path, adb_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"target": {"serial": "test"}, "adb_path": adb_path}))
+    assert load_config(path).adb_path == adb_path
+
+
+def test_absolute_adb_path_keeps_selected_executable(tmp_path):
+    executable = (tmp_path / "tools" / "adb.exe").resolve()
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"target": {"serial": "test"}, "adb_path": str(executable)}))
+    assert load_config(path).adb_path == str(executable)

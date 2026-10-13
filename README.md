@@ -41,7 +41,7 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 | max_capture_bytes | 16777216；两条原始流合计的持久采集上限 |
 | output_directory | `./data/command-outputs`；相对配置文件所在目录解析 |
 
-带目录的相对 `adb_path` 也相对配置文件解析；单独的 `adb` 通过 PATH 查找。IPv6 网络目标使用 `[host]:port`。示例配置中的 `<TV_IP>` 是待替换占位值，不能直接运行。
+带路径分隔符的相对 `adb_path`（包括 `./adb.exe` 和 `.\adb.exe`）相对配置文件解析；裸 `adb` 或 `adb.exe` 通过 PATH 查找。IPv6 网络目标使用 `[host]:port`。示例配置中的 `<TV_IP>` 是待替换占位值，不能直接运行。
 
 每个 shell 查询始终使用 `adb -s <完整目标> shell -T -n <已引用的命令字符串>`。精确目标必须在 `adb devices -l` 中唯一且状态为 `device`；其他设备数量不影响选定目标。USB 不 connect；offline / unauthorized / 重复目标条目明确报错。要求该目标支持 `shell_v2`；旧协议不执行查询，以避免伪造退出码或混合 stdout/stderr。
 
@@ -80,7 +80,7 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 |---|---|
 | schema_version | 固定 `adb-command/v1` |
 | output_id | 32 位小写十六进制记录 ID；无记录或落盘失败为 null，不是宿主 Artifact ID |
-| target_serial / argv | 配置的精确目标及实际通过策略的设备端参数 |
+| target_serial / argv | 配置的精确目标及通过策略的设备端参数；策略校验拒绝、未提交的命令返回空 argv |
 | started_at / finished_at | UTC，ISO 8601，带 `+00:00`；覆盖连接准备到执行及异常收尾 |
 | duration_ms | 同一阶段的单调时钟耗时；不包含排队及结果预览/元数据落盘 |
 | exit_code | ADB 进程自然结束时的实际码；shell_v2 传回远端退出码；超时/取消/超限等未自然结束为 null |
@@ -92,6 +92,8 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 | error_code / error_message | 成功为 null；失败为明确分类和简短说明，诊断不混入 stderr 证据 |
 
 工具通过公开 SDK 的 `Annotated[CallToolResult, CommandResult]` 输出 Schema、结构化数据和 `isError`，文本块只包含一份精简 JSON。空属性值加退出码 0 是成功事实，工具不判定 TAM 预期或 PASS/FAIL。非零退出即工具错误，但完整采集的失败命令可以有 `capture_complete=true`。ADB 自身连接/传输失败也可能返回非零码，不能仅凭退出码断言设备端命令确已执行。
+
+命令策略校验拒绝时返回 `invalid_command`、`argv=[]`、`output_id=null` 和简短原因，不回显超长输入，不启动 ADB 或创建记录。通过策略的请求仍保留原始 argv，包括连接或执行失败的请求；工具 Schema 和结果契约版本不变。
 
 错误类别包含 `invalid_command`、`device_not_found`、`device_offline`、`device_unauthorized`、`device_ambiguous`、`device_not_ready`、`connect_failed`、`connect_timeout`、`shell_protocol_unsupported`、`adb_unavailable`、`adb_error`、`command_failed`、`command_timeout`、`cancelled`、`capture_limit`、`capture_failed`、`storage_failed`、`cleanup_failed`。
 

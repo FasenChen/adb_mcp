@@ -57,11 +57,14 @@ async def test_stdio_initialize_list_call_and_error(tmp_path):
             assert not normal.isError
             verify_one_text_and_structure(normal)
             assert normal.structuredContent["stdout"] == "ro.test.normal\r\n"
+            assert normal.structuredContent["argv"] == ["getprop", "ro.test.normal"]
             failed = await session.call_tool("run_adb_shell", {"argv": ["getprop", "ro.test.fail"]})
             assert failed.isError and failed.structuredContent["exit_code"] == 7
+            assert failed.structuredContent["argv"] == ["getprop", "ro.test.fail"]
             verify_one_text_and_structure(failed)
             invalid = await session.call_tool("run_adb_shell", {"argv": ["sh", "-c", "id"]})
             assert invalid.isError and invalid.structuredContent["error_code"] == "invalid_command"
+            assert invalid.structuredContent["argv"] == []
             for argv in [[], [1]]:
                 assert (await session.call_tool("run_adb_shell", {"argv": argv})).isError
             page = await session.call_tool(
@@ -82,6 +85,30 @@ async def test_stdio_initialize_list_call_and_error(tmp_path):
                     | options,
                 )
                 assert result.isError
+
+
+async def test_stdio_oversized_command_error_is_bounded_without_adb(tmp_path, monkeypatch):
+    log = tmp_path / "adb.log"
+    monkeypatch.setenv("FAKE_ADB_LOG", str(log))
+    async with stdio_client(parameters(tmp_path)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            response = await session.call_tool(
+                "run_adb_shell",
+                {
+                    "argv": ["getprop", "x" * 100000],
+                },
+            )
+            assert response.isError
+            verify_one_text_and_structure(response)
+            result = response.structuredContent
+            assert result["error_code"] == "invalid_command"
+            assert result["argv"] == [] and result["output_id"] is None
+            assert result["exit_code"] is None and not result["capture_complete"]
+            assert result["stdout"] == result["stderr"] == ""
+            assert len(response.content[0].text) < 2048
+    assert not log.exists()
+    assert not (tmp_path / "outputs").exists()
 
 
 async def test_stdio_saved_output_survives_server_restart(tmp_path):

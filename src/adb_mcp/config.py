@@ -81,6 +81,6 @@ def load_config(path: Path) -> Config:
     values["output_directory"] = (path.parent / output).resolve()
     config = Config.model_validate(values)
     executable = Path(config.adb_path)
-    if executable.is_absolute() or executable.parent != Path("."):
+    if executable.is_absolute() or "/" in config.adb_path or "\\" in config.adb_path:
         config.adb_path = str((path.parent / executable).resolve())
     return config

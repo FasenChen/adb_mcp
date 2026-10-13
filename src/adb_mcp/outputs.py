@@ -3,7 +3,6 @@
 import codecs
 import json
 import os
-import re
 from pathlib import Path
 from typing import BinaryIO
 from uuid import uuid4
@@ -108,8 +107,6 @@ class OutputStore:
         request = OutputRequest.model_validate(request.model_dump())
         if request.max_chars > self.read_max_chars:
             raise ValueError(f"max_chars must not exceed {self.read_max_chars}")
-        if not re.fullmatch(r"[0-9a-f]{32}", request.output_id):
-            raise ValueError("invalid output_id")
         directory = self.directory / request.output_id
         try:
             record = CommandResult.model_validate_json((directory / "record.json").read_bytes())
