@@ -75,6 +75,9 @@ elif args[:5] == ["-s", serial, "shell", "-T", "-n"] and len(args) == 6:
         sys.stdout.buffer.write("valid \ufffd\n".encode())
     elif query_mode == "exact_limit":
         sys.stdout.buffer.write(b"X" * 128)
+    elif query_mode == "warning":
+        sys.stdout.buffer.write((key + "\r\n").encode())
+        sys.stderr.buffer.write(b"query warning\n")
     else:
         sys.stdout.buffer.write((key + "\r\n").encode())
 else:

@@ -51,23 +51,23 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 
 ### run_adb_shell
 
-按 `adb shell` 后的一级命令分类，输入 `command` 和 `query` 两个枚举参数：
+只传一个查询枚举：
 
 ```json
-{"command":"getprop","query":"clientidbase"}
+{"query":"clientidbase"}
 ```
 
 ```json
-{"command":"pm","query":"features"}
+{"query":"features"}
 ```
 
 ```json
-{"command":"settings","query":"android_id"}
+{"query":"android_id"}
 ```
 
-只允许以下 5 类、10 个完整命令组合：
+命令类别留在内部映射中，服务端根据 query 生成完整命令。仍只开放以下 5 类、10 项固定只读查询：
 
-| command | query | 固定设备端命令 |
+| 内部类别 | query | 固定设备端命令 |
 |---|---|---|
 | getprop | clientidbase | `getprop ro.com.google.clientidbase` |
 | getprop | boot_serialno | `getprop ro.boot.serialno` |
@@ -80,50 +80,48 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 | ifconfig | interfaces | `ifconfig` |
 | ip | addresses | `ip addr` |
 
-`command` 和 `query` 必须匹配，例如 `ip + clientidbase` 返回 `invalid_command`。命令由服务端固定映射生成，调用方不能传属性名、键名、选项、过滤器或 Shell 字符串。Operator Tier 和 Global Assist 都使用 `pm + features`，从返回文本中查找 `com.google.android.tv` / `GLOBAL_ASSIST_TRIGGERING`；保留完整原始证据，不执行管道或 `grep`。
+调用方不再选择 command，也不能用属性名、键名、选项或 Shell 字符串影响执行。Operator Tier 和 Global Assist 都使用 `features`，从返回文本中查找 `com.google.android.tv` / `GLOBAL_ASSIST_TRIGGERING`；保存完整原始证据，不执行管道或 `grep`。
 
-`cmd testharness enable` 会恢复出厂，`am start -a android.settings.SETTINGS` 会打开界面，这两类不开放到只读工具。原来允许的全部属性查询、任意属性/设置键、`settings list` 和 `dumpsys display` 已移出权限范围。一级命令分类不授予该类别下其他操作权限。
+`cmd testharness enable` 会恢复出厂，`am start -a android.settings.SETTINGS` 会打开界面，两类均不开放。全部属性查询、任意属性/设置键、`settings list` 和 `dumpsys display` 也不在权限范围内。一级命令分类不授予该类别下其他操作权限。
 
-**输入契约已变更**：旧 `{"argv":[...]}` 调用被拒绝；工具名称、返回 `argv` 和 `adb-command/v1` 保留。客户端须改用两个枚举参数，重启服务并重新发现、绑定工具 Schema。SDK 校验缺失参数、非法枚举值或类型时返回工具错误；有效枚举的错误组合返回结构化 `invalid_command`。
+枚举、固定映射及执行/历史读取策略集中在 `commands.py`。新增查询时补 `Query` 枚举、`COMMANDS` 映射、对应测试和文档；无需新增工具或类别参数，必须核对完整命令是否只读。本机使用 `create_subprocess_exec`，设备端命令逐参数 POSIX 引用；非 PTY 模式保留双流和原始行尾。
 
-枚举、固定映射及执行/历史读取策略集中在 `commands.py`。新增查询时补 `Query` 枚举、`COMMANDS` 映射、对应测试和文档；已有类别不增加工具。新增一级命令还需更新 `Command` 枚举和简短工具描述，并核对完整命令是否只读。
+### 文本输出
 
-本机用 `create_subprocess_exec`，设备端命令用 POSIX 逐参数引用后作为一条字符串提交。使用非 PTY 模式保留两条流和原始行尾。
+正常、完整且无 stderr 或解码异常时，只返回一个文本块，内容等于 stdout 原文；不包裹 JSON，不 trim 或改写换行。成功但值为空时，文本为空且 `isError=false`，不冒充命令失败。
 
-### 命令结果 adb-command/v1
+只有需要说明时才增加独立文本块：
 
-| 字段 | 契约 |
-|---|---|
-| schema_version | 固定 `adb-command/v1` |
-| output_id | 32 位小写十六进制记录 ID；无记录或落盘失败为 null，不是宿主 Artifact ID |
-| target_serial / argv | 配置的精确目标及通过策略的设备端参数；策略校验拒绝、未提交的命令返回空 argv |
-| started_at / finished_at | UTC，ISO 8601，带 `+00:00`；覆盖连接准备到执行及异常收尾 |
-| duration_ms | 同一阶段的单调时钟耗时；不包含排队及结果预览/元数据落盘 |
-| exit_code | ADB 进程自然结束时的实际码；shell_v2 传回远端退出码；超时/取消/超限等未自然结束为 null |
-| stdout / stderr | UTF-8 原文或各自有界预览；不 trim、不合并、不生成语义摘要 |
-| stdout_bytes / stderr_bytes | 已采集并保存的原始字节数；超限后的尾部不保存 |
-| stdout_truncated / stderr_truncated | 本次预览是否省略记录中后续文本 |
-| capture_complete | 两条原始流是否完整采集；不代表命令成功或用例通过 |
-| decoding_errors | 任一原始流是否含无效 UTF-8；显示形式采用替换字符，原始字节仍保存 |
-| error_code / error_message | 成功为 null；失败为明确分类和简短说明，诊断不混入 stderr 证据 |
+- stderr 非空：追加 `[stderr]` 文本块，保留其原文，与 stdout 分开。
+- 命令失败：`isError=true`，追加 `[adb_mcp]` 提示，含错误分类、退出码及简短说明；已取得的 stdout/stderr 仍保留。非法 query、缺失参数或类型错误由 SDK 拒绝，不执行 ADB。
+- 输出预览截断：标明对应流已截断，并给出 `read_command_output` 的完整补读参数；`start_char` 从已显示的 Unicode 码点数开始。
+- 采集不完整或解码失败：明确标明 `capture_complete=false` / `decoding_errors=true`。补读只能取得已保存部分，不能恢复未采集的尾部。
 
-工具通过公开 SDK 的 `Annotated[CallToolResult, CommandResult]` 输出 Schema、结构化数据和 `isError`，文本块只包含一份精简 JSON。空属性值加退出码 0 是成功事实，工具不判定 TAM 预期或 PASS/FAIL。非零退出即工具错误，但完整采集的失败命令可以有 `capture_complete=true`。ADB 自身连接/传输失败也可能返回非零码，不能仅凭退出码断言设备端命令确已执行。
+补读提示示例（ID 为占位值）：
 
-命令策略校验拒绝时返回 `invalid_command`、`argv=[]`、`output_id=null` 和简短原因，不回显超长输入，不启动 ADB 或创建记录。通过策略的请求仍保留固定映射的 argv，包括连接或执行失败的请求；结果契约版本保持不变，输入 Schema 已更新。
+```text
+[adb_mcp]
+stdout_truncated=true
+read_command_output {"output_id":"<32_HEX_RECORD_ID>","stream":"stdout","start_char":6000}
+```
 
-错误类别包含 `invalid_command`、`device_not_found`、`device_offline`、`device_unauthorized`、`device_ambiguous`、`device_not_ready`、`connect_failed`、`connect_timeout`、`shell_protocol_unsupported`、`adb_unavailable`、`adb_error`、`command_failed`、`command_timeout`、`cancelled`、`capture_limit`、`capture_failed`、`storage_failed`、`cleanup_failed`。
+工具不再返回 `structuredContent` 或输出 Schema；设备、argv、时间、退出码、字节数、记录 ID 和完整性等元数据继续保存到本地 `record.json`，内部记录格式仍为 `adb-command/v1`。正常短结果不附记录 ID；只有需要补读时才将 ID 和位置送入调用上下文。成功执行只代表取得事实，不判定 TAM 预期或 PASS/FAIL；空属性值加退出码 0 是成功事实。
+
+**接口已精简**：旧 argv 请求必须改为 query；旧 command 字段无需再传。客户端应重启 MCP 并重新发现、绑定工具，且停止对返回文本做 JSON 解析或读取 structuredContent。FastMCP 对额外字段按 SDK 默认行为忽略，它们不参与命令生成。错误以协议 `isError` 和独立文本提示表示。
 
 ### read_command_output
 
+仅在需要补读时使用提示中的参数；max_chars 可省略，使用配置上限内的默认值：
+
 ```json
-{"output_id":"<32_HEX_RECORD_ID>","stream":"stdout","start_char":0,"max_chars":12000}
+{"output_id":"<32_HEX_RECORD_ID>","stream":"stdout","start_char":6000}
 ```
 
-偏移从 0 开始，按解码后 **Unicode 码点**计数（不是字节、UTF-16 单元、token 或行号）。保留 CR/LF；组合字符按各自码点计数。返回 `start_char`、`text`、`next_char`、`eof`、`total_chars`、原记录 `capture_complete` / `decoding_errors` / `error_code`。`next_char` 可直接用于下一页。
+返回的第一个文本块是请求窗口内的原文。还有后续文本时，独立提示块包含下一次调用参数，start_char 是当前窗口结束位置；最后一页不附分页元数据。保留 CR/LF，偏移按 UTF-8 解码后的 Unicode 码点计数，不是字节、UTF-16 单元、token 或行号。
 
-每次读取先验证记录中的完整 argv 仍在当前只读名单内；旧宽权限记录会报错，原文件保留。当前允许命令的旧记录仍可跨重启读取，无需迁移。
+原命令失败、原采集不完整或解码异常仍明确提示。读取已保存的失败命令可以成功（`isError=false`，`source_error=...` 表示原命令错误）；非法 ID、读取越界、存储损坏等读取错误则标记 `isError=true`。偏移等于总字符数返回空文本；超过总字符数、负数、错误 stream 或超过读取上限均报错。
 
-偏移等于总字符数时返回空文本和 `eof=true`；超过总字符数、负数、错误 stream、非法 ID、超过服务端读取上限均报错。只接受记录 ID，不能传路径。分页成功不覆盖原命令的错误或不完整状态；解码失败时不能用替换后的文本做精确证据比对。短输出直接使用第一次返回，不必额外读取。
+每次读取先核对记录 argv 仍在当前只读名单内；旧宽权限记录报错，原文件保留。当前允许命令的历史记录仍可跨重启读取，无需迁移。只接受记录 ID，不能传路径，也不会重放设备命令。
 
 ## 原始记录与生命周期
 

@@ -8,23 +8,25 @@
 
 当前宿主适配器 0.3.2 的实际发现名称已验证为 `adb_run_adb_shell`、`adb_read_command_output`；MCP 自身名称不带 `adb_` 前缀。本项目没有自动注册。
 
-## 查询输入契约更新
+## 简化后的输入输出
 
-`adb_run_adb_shell` 改用一级命令类别和查询选项两个枚举，例如：
+`adb_run_adb_shell` 只接受一个 query 枚举，例如：
 
 ```json
-{"command":"getprop","query":"clientidbase"}
+{"query":"clientidbase"}
 ```
 
-旧 `argv` 请求被拒绝。工具名称和 `adb-command/v1` 返回格式保留，返回 `argv` 记录实际固定命令。宿主应重启 MCP 并重新发现、绑定更新后的 Schema；既有硬编码调用、保存的工具调用示例或提示词需同步改为两个枚举。完整 5 类、10 项查询见 README；只读服务不开放 `cmd` / `am`。`read_command_output` 每次核对记录命令是否仍被允许，旧宽权限记录保留在磁盘上但不可通过工具读取。
+一级命令类别由服务端固定映射决定。5 类、10 项白名单见 README；只读服务不开放 cmd / am。正常结果就是 stdout 原文，空值仍是成功结果；stderr、命令失败、截断及解码异常另有明确提示。工具结果没有 structuredContent 或输出 Schema，宿主不能再把文本当作 JSON 解析，也不能从 ToolMessage Artifact 获取命令元数据。
 
-## 证据与业务判断
+宿主应重启 MCP 并重新发现、绑定新工具。短输出直接使用第一次返回；长输出的提示会提供 `read_command_output` 所需 ID、流和下一位置，其返回也以原文为主。分页每次核对当前命令策略，旧宽权限记录保留在磁盘但不可通过工具读取。
 
-`output_id` 属于 MCP 存储。宿主必须导入两条原始流及命令元数据，生成自己的 `artifact_id`，关联 run/task/step，并保存源 `output_id`、目标、argv、退出码、时间、字节计数、完整性和解码标记。不要把 MCP ID 直接当作宿主 Artifact ID，或仅依赖模型文字保存证据。
+## 本地记录与业务判断
 
-对持久化结构评估现有截图数据及迁移；命令证据需在 API、前端详情、报告和导出中有一致的公开表示。前一步查询结果应可被后一步 Judge 读取，不限于首任务临时上下文。
+完整元数据仍保存在 MCP 的 `output_directory/<output_id>/record.json`，内部格式为 `adb-command/v1`，两条原始流也继续保存。元数据和历史文件未删除、未迁移；普通短结果不向模型暴露 output_id。
 
-判断边界：成功执行只代表取得事实；TAM 具体期望值仍需真实输入。同值 PASS、异值 FAIL；输入缺失、工具错误或证据不完整 BLOCKED。保留实际值及原始换行，明确用例要求的规范化方式，不默认 `.strip()`。解码失败不能伪装成精确文本比对。
+P4 如需宿主 Artifact，仍需设计服务端记录的定位、原始流和元数据导入、run/task/step 关联。当前工具文本不承担这个归档接口，不把 MCP 记录 ID 当作宿主 artifact_id；本轮没有实现该链路。
+
+判断边界：成功执行只代表取得事实，TAM 具体期望值仍需真实输入。同值 PASS、异值 FAIL；输入缺失、工具错误或证据不完整 BLOCKED。保留原始换行，明确用例要求的规范化方式；解码失败不能伪装成精确文本比对。
 
 ## 宿主修改路径与验收
 
@@ -48,6 +50,6 @@
 ../../.venv/Scripts/python.exe scripts/verify_host_adapter.py --config config.json --server-python .venv/Scripts/python.exe
 ```
 
-脚本使用公开 `load_mcp_tools`、真实 stdio 调用及 `convert_to_openai_messages`，核对工具前缀、success/error 状态和模型消息中的文本数量。结构化数据保留在成功 ToolMessage 的 Artifact，模型消息中只有一份 JSON 文本；错误结果也只有一份文本。SDK 原始结果同时有 content 和 structuredContent，这是协议契约，并不意味着适配器把两份都送给模型。
+脚本使用公开 `load_mcp_tools`、真实 stdio 调用及 `convert_to_openai_messages`，核对工具前缀、success/error 状态和模型消息中的文本数量。成功模型消息直接保留 stdout 原文，错误消息保留 SDK 错误说明；二者没有命令元数据 Artifact。脚本核对成功文本与本地记录逐字符相同，非法查询未创建记录。
 
 此验证到公开消息转换边界为止，没有调用 LLM、没有启动测试 Agent 原 case，也没有证明现有 Judge 已接受命令证据。

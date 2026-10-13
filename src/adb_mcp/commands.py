@@ -1,4 +1,4 @@
-"""Command policy and the public evidence contract."""
+"""Fixed read-only queries and local evidence models."""
 
 import shlex
 from typing import Annotated, Literal
@@ -26,7 +26,6 @@ ErrorCode = Literal[
     "cleanup_failed",
 ]
 Stream = Literal["stdout", "stderr"]
-Command = Literal["getprop", "pm", "settings", "ifconfig", "ip"]
 Query = Literal[
     "clientidbase",
     "boot_serialno",
@@ -59,10 +58,10 @@ class CommandError(Exception):
         self.code = code
 
 
-def resolve_query(command: Command, query: Query) -> list[str]:
+def resolve_query(query: Query) -> list[str]:
     argv = COMMANDS.get(query)
-    if argv is None or argv[0] != command:
-        raise CommandError("invalid_command", "unsupported command/query combination")
+    if argv is None:
+        raise CommandError("invalid_command", "unsupported query")
     return argv.copy()
 
 

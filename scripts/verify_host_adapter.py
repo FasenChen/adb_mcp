@@ -22,6 +22,10 @@ async def verify(config_path: Path, server_python: Path, report_path: Path) -> N
         env=dict(os.environ) | {"PYTHONUTF8": "1"},
     )
     observations = []
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    output_directory = Path(config.get("output_directory", "./data/command-outputs"))
+    if not output_directory.is_absolute():
+        output_directory = config_path.resolve().parent / output_directory
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -33,10 +37,11 @@ async def verify(config_path: Path, server_python: Path, report_path: Path) -> N
             tool = next(tool for tool in tools if tool.name == "adb_run_adb_shell")
             for index, arguments in enumerate(
                 [
-                    {"command": "getprop", "query": "clientidbase"},
-                    {"command": "ip", "query": "clientidbase"},
+                    {"query": "clientidbase"},
+                    {"query": "unsupported"},
                 ]
             ):
+                before = set(output_directory.glob("*/record.json"))
                 message = await tool.ainvoke(
                     {
                         "type": "tool_call",
@@ -48,9 +53,15 @@ async def verify(config_path: Path, server_python: Path, report_path: Path) -> N
                 outgoing = convert_to_openai_messages([message], text_format="block")[0]
                 content = outgoing["content"]
                 assert isinstance(content, list) and len(content) == 1
-                result = json.loads(content[0]["text"])
                 assert message.status == ("success" if index == 0 else "error")
-                assert result["error_code"] == (None if index == 0 else "invalid_command")
+                records = set(output_directory.glob("*/record.json")) - before
+                if index == 0:
+                    assert len(records) == 1
+                    record = json.loads(records.pop().read_text(encoding="utf-8"))
+                    assert content[0]["text"] == record["stdout"]
+                else:
+                    assert "unsupported" in content[0]["text"] and not records
+                assert message.artifact is None
                 assert "artifact" not in outgoing
                 observations.append(
                     {
@@ -59,7 +70,6 @@ async def verify(config_path: Path, server_python: Path, report_path: Path) -> N
                         "return_text_chars": len(content[0]["text"]),
                         "structured_artifact_present": message.artifact is not None,
                         "artifact_sent_in_model_message": False,
-                        "output_id": result["output_id"],
                     }
                 )
     report = {

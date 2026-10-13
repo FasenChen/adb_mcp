@@ -1,12 +1,10 @@
 import shlex
-from itertools import product
 from typing import get_args
 
 import pytest
 
 from adb_mcp.commands import (
     COMMANDS,
-    Command,
     CommandError,
     Query,
     resolve_query,
@@ -31,30 +29,22 @@ from adb_mcp.commands import (
     ],
 )
 def test_allowed_commands_and_posix_quoting(query, argv):
-    resolved = resolve_query(argv[0], query)
+    resolved = resolve_query(query)
     assert resolved == argv
     assert validate_command(argv) == argv
     assert shlex.split(shell_command(argv)) == argv
     resolved.append("extra")
-    assert resolve_query(argv[0], query) == argv
+    assert resolve_query(query) == argv
 
 
 def test_enum_and_mapping_cover_same_queries():
     assert set(get_args(Query)) == set(COMMANDS)
-    assert set(get_args(Command)) == {argv[0] for argv in COMMANDS.values()}
 
 
-@pytest.mark.parametrize(
-    ("command", "query"),
-    [
-        (command, query)
-        for command, query in product(get_args(Command), get_args(Query))
-        if COMMANDS[query][0] != command
-    ],
-)
-def test_mismatched_category_is_rejected(command, query):
-    with pytest.raises(CommandError, match="command/query"):
-        resolve_query(command, query)
+@pytest.mark.parametrize("query", ["unknown", "getprop", "testharness_enable", "open_settings", ""])
+def test_unknown_query_is_rejected(query):
+    with pytest.raises(CommandError, match="unsupported query"):
+        resolve_query(query)
 
 
 @pytest.mark.parametrize(

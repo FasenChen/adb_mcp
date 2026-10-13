@@ -12,7 +12,7 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from adb_mcp.commands import COMMANDS, CommandResult, OutputPage
+from adb_mcp.commands import COMMANDS, CommandResult
 from adb_mcp.config import load_config
 
 
@@ -55,6 +55,7 @@ async def verify(path: Path, report_path: Path) -> None:
             await session.initialize()
             tools = (await session.list_tools()).tools
             assert {tool.name for tool in tools} == {"run_adb_shell", "read_command_output"}
+            assert all(tool.outputSchema is None for tool in tools)
             report["tool_schemas_utf8_bytes"] = len(
                 json.dumps(
                     [tool.model_dump(mode="json", exclude_none=True) for tool in tools],
@@ -63,19 +64,20 @@ async def verify(path: Path, report_path: Path) -> None:
                 ).encode("utf-8")
             )
             for query_name, argv in COMMANDS.items():
-                response = await session.call_tool(
-                    "run_adb_shell", {"command": argv[0], "query": query_name}
-                )
-                assert len(response.content) == 1
-                assert json.loads(response.content[0].text) == response.structuredContent
-                result = CommandResult.model_validate(response.structuredContent)
+                before = set(config.output_directory.glob("*/record.json"))
+                response = await session.call_tool("run_adb_shell", {"query": query_name})
+                assert response.structuredContent is None
+                records = set(config.output_directory.glob("*/record.json")) - before
+                assert len(records) == 1
+                result = CommandResult.model_validate_json(records.pop().read_bytes())
+                assert response.content[0].text == result.stdout
                 assert not response.isError and result.exit_code == 0, result.error_code
                 assert result.target_serial == config.target_serial
                 assert result.argv == argv
                 assert result.capture_complete and not result.decoding_errors
                 query = result.model_dump(exclude={"stdout", "stderr"})
                 query["query"] = query_name
-                query["return_text_chars"] = len(response.content[0].text)
+                query["return_text_chars"] = sum(len(block.text) for block in response.content)
                 for stream in ("stdout", "stderr"):
                     raw = (
                         config.output_directory / result.output_id / f"{stream}.bin"
@@ -105,6 +107,10 @@ async def verify(path: Path, report_path: Path) -> None:
             await session.initialize()
             for query in report["queries"]:
                 for stream in ("stdout", "stderr"):
+                    raw = (
+                        config.output_directory / query["output_id"] / f"{stream}.bin"
+                    ).read_bytes()
+                    expected = raw.decode("utf-8")
                     parts = []
                     start = 0
                     while True:
@@ -118,17 +124,15 @@ async def verify(path: Path, report_path: Path) -> None:
                             },
                         )
                         assert not response.isError
-                        page = OutputPage.model_validate(response.structuredContent)
-                        assert page.capture_complete and not page.decoding_errors
-                        parts.append(page.text)
-                        if page.eof:
+                        assert response.structuredContent is None
+                        text = response.content[0].text
+                        assert text == expected[start : start + config.read_max_chars]
+                        parts.append(text)
+                        start += len(text)
+                        if start == len(expected):
                             break
-                        assert page.next_char > start
-                        start = page.next_char
-                    raw = (
-                        config.output_directory / query["output_id"] / f"{stream}.bin"
-                    ).read_bytes()
-                    assert "".join(parts) == raw.decode("utf-8")
+                        assert text
+                    assert "".join(parts) == expected
     report["restart_pagination_verified"] = True
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
