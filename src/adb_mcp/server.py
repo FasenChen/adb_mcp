@@ -7,10 +7,19 @@ from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel, Field, StrictStr
+from pydantic import BaseModel, Field
 
 from .adb import ADBService
-from .commands import CommandError, CommandResult, OutputPage, OutputRequest, Stream
+from .commands import (
+    Command,
+    CommandError,
+    CommandResult,
+    OutputPage,
+    OutputRequest,
+    Query,
+    Stream,
+    resolve_query,
+)
 from .config import Config
 
 
@@ -31,15 +40,16 @@ def create_server(config: Config) -> FastMCP:
 
     @server.tool(
         annotations=annotations,
-        description="Run a fixed-target read-only query: getprop [property], settings get/list "
-        "global/system/secure, or dumpsys display (no extra flags). No shell operators. "
-        "Returns raw stream previews, exit status and persistent output_id; no case verdict.",
+        description="Run a fixed-target read-only query. getprop: property queries; pm: features; "
+        "settings: android_id; ifconfig: interfaces; ip: addresses. "
+        "Returns raw previews, exit status and saved output_id; no case verdict.",
     )
     async def run_adb_shell(
-        argv: Annotated[list[StrictStr], Field(min_length=1, max_length=32, strict=True)],
+        command: Command,
+        query: Query,
     ) -> Annotated[CallToolResult, CommandResult]:
         try:
-            result = await service.run(argv)
+            result = await service.run(resolve_query(command, query))
         except CommandError as exc:
             now = datetime.now(UTC).isoformat()
             result = CommandResult(

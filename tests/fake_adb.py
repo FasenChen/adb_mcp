@@ -44,33 +44,36 @@ elif args[:5] == ["-s", serial, "shell", "-T", "-n"] and len(args) == 6:
         sys.exit(1)
     argv = shlex.split(args[5])
     key = argv[-1]
-    if key == "ro.test.empty":
+    query_mode = json.loads(os.environ.get("FAKE_ADB_QUERY_MODES", "{}")).get(
+        key, os.environ.get("FAKE_ADB_QUERY_MODE", "normal")
+    )
+    if query_mode == "empty":
         pass
-    elif key == "ro.test.fail":
+    elif query_mode == "fail":
         sys.stdout.buffer.write(b"partial\r\n")
         sys.stderr.buffer.write(b"remote error\n")
         sys.exit(7)
-    elif key == "ro.test.slow":
+    elif query_mode == "slow":
         sys.stdout.buffer.write(b"before timeout\r\n")
         sys.stdout.buffer.flush()
         time.sleep(60)
-    elif key == "ro.test.long":
+    elif query_mode == "long":
         for _ in range(20):
             sys.stdout.buffer.write(("中😀e\u0301\r\n" * 1000).encode())
             sys.stdout.buffer.flush()
             sys.stderr.buffer.write(b"E" * 10000)
             sys.stderr.buffer.flush()
-    elif key == "ro.test.single_line":
+    elif query_mode == "single_line":
         sys.stdout.buffer.write(("中😀" * 100000).encode())
-    elif key == "ro.test.limit":
+    elif query_mode == "limit":
         sys.stdout.buffer.write(b"L" * 20000)
         sys.stdout.buffer.flush()
         time.sleep(60)
-    elif key == "ro.test.invalid_utf8":
+    elif query_mode == "invalid_utf8":
         sys.stdout.buffer.write(b"hello\xff\xfe\r\n")
-    elif key == "ro.test.literal_replacement":
+    elif query_mode == "literal_replacement":
         sys.stdout.buffer.write("valid \ufffd\n".encode())
-    elif key == "ro.test.exact_limit":
+    elif query_mode == "exact_limit":
         sys.stdout.buffer.write(b"X" * 128)
     else:
         sys.stdout.buffer.write((key + "\r\n").encode())

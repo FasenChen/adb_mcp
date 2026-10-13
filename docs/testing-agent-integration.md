@@ -8,6 +8,16 @@
 
 当前宿主适配器 0.3.2 的实际发现名称已验证为 `adb_run_adb_shell`、`adb_read_command_output`；MCP 自身名称不带 `adb_` 前缀。本项目没有自动注册。
 
+## 查询输入契约更新
+
+`adb_run_adb_shell` 改用一级命令类别和查询选项两个枚举，例如：
+
+```json
+{"command":"getprop","query":"clientidbase"}
+```
+
+旧 `argv` 请求被拒绝。工具名称和 `adb-command/v1` 返回格式保留，返回 `argv` 记录实际固定命令。宿主应重启 MCP 并重新发现、绑定更新后的 Schema；既有硬编码调用、保存的工具调用示例或提示词需同步改为两个枚举。完整 5 类、10 项查询见 README；只读服务不开放 `cmd` / `am`。`read_command_output` 每次核对记录命令是否仍被允许，旧宽权限记录保留在磁盘上但不可通过工具读取。
+
 ## 证据与业务判断
 
 `output_id` 属于 MCP 存储。宿主必须导入两条原始流及命令元数据，生成自己的 `artifact_id`，关联 run/task/step，并保存源 `output_id`、目标、argv、退出码、时间、字节计数、完整性和解码标记。不要把 MCP ID 直接当作宿主 Artifact ID，或仅依赖模型文字保存证据。

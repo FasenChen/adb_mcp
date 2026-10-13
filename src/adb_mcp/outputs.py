@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import BinaryIO
 from uuid import uuid4
 
-from .commands import CommandError, CommandResult, OutputPage, OutputRequest, Stream
+from .commands import (
+    CommandError,
+    CommandResult,
+    OutputPage,
+    OutputRequest,
+    Stream,
+    validate_command,
+)
 
 
 def scan_text(path: Path, start: int, limit: int) -> tuple[str, int, bool]:
@@ -112,6 +119,12 @@ class OutputStore:
             record = CommandResult.model_validate_json((directory / "record.json").read_bytes())
             if record.output_id != request.output_id:
                 raise ValueError("record ID mismatch")
+            try:
+                validate_command(record.argv)
+            except CommandError as exc:
+                raise ValueError(
+                    "saved command is outside the current read-only query list"
+                ) from exc
             for stream in ("stdout", "stderr"):
                 if (directory / f"{stream}.bin").stat().st_size != getattr(
                     record, f"{stream}_bytes"

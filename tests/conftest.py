@@ -27,6 +27,8 @@ def fake_adb(monkeypatch, tmp_path):
     monkeypatch.setenv("FAKE_ADB_CONNECTED", str(tmp_path / "connected"))
     monkeypatch.setenv("FAKE_ADB_SERIAL", "test-device")
     monkeypatch.setenv("FAKE_ADB_MODE", "normal")
+    monkeypatch.setenv("FAKE_ADB_QUERY_MODE", "normal")
+    monkeypatch.delenv("FAKE_ADB_QUERY_MODES", raising=False)
     return processes
 
 

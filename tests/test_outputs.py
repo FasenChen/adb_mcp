@@ -9,8 +9,9 @@ from adb_mcp.commands import OutputRequest
 from adb_mcp.outputs import OutputStore
 
 
-async def test_long_parallel_streams_restart_pagination(config, fake_adb, tmp_path):
-    result = await ADBService(config).run(["getprop", "ro.test.long"])
+async def test_long_parallel_streams_restart_pagination(config, fake_adb, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_QUERY_MODE", "long")
+    result = await ADBService(config).run(["getprop", "ro.boot.serialno"])
     assert result.error_code is None and result.capture_complete
     assert result.stdout_truncated and result.stderr_truncated
     assert len(result.stdout) == len(result.stderr) == 20
@@ -45,8 +46,9 @@ async def test_long_parallel_streams_restart_pagination(config, fake_adb, tmp_pa
     ).read_bytes() == expected.encode()
 
 
-async def test_long_single_line(config, fake_adb):
-    result = await ADBService(config).run(["getprop", "ro.test.single_line"])
+async def test_long_single_line(config, fake_adb, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_QUERY_MODE", "single_line")
+    result = await ADBService(config).run(["getprop", "ro.boot.serialno"])
     assert result.error_code is None
     assert result.stdout_truncated and "\n" not in result.stdout
     page = ADBService(config).store.read(
@@ -59,9 +61,10 @@ async def test_long_single_line(config, fake_adb):
     assert page.total_chars == 200000 and len(page.text) == 5 and page.eof
 
 
-async def test_capture_limit_stops_and_marks_partial(config, fake_adb, tmp_path):
+async def test_capture_limit_stops_and_marks_partial(config, fake_adb, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_QUERY_MODE", "limit")
     config.max_capture_bytes = 128
-    result = await ADBService(config).run(["getprop", "ro.test.limit"])
+    result = await ADBService(config).run(["getprop", "ro.boot.serialno"])
     assert result.error_code == "capture_limit"
     assert not result.capture_complete and result.exit_code is None
     assert result.stdout_bytes + result.stderr_bytes == 128
@@ -72,24 +75,26 @@ async def test_capture_limit_stops_and_marks_partial(config, fake_adb, tmp_path)
     assert sum("shell" in args for args in calls(tmp_path)) == 1
 
 
-async def test_exact_capture_limit_is_complete(config, fake_adb):
+async def test_exact_capture_limit_is_complete(config, fake_adb, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_QUERY_MODE", "exact_limit")
     config.max_capture_bytes = 128
-    result = await ADBService(config).run(["getprop", "ro.test.exact_limit"])
+    result = await ADBService(config).run(["getprop", "ro.boot.serialno"])
     assert result.error_code is None and result.stdout_bytes == 128
     assert result.capture_complete
 
 
 @pytest.mark.parametrize(
-    ("key", "errors"),
+    ("mode", "errors"),
     [
-        ("ro.test.invalid_utf8", True),
-        ("ro.test.literal_replacement", False),
+        ("invalid_utf8", True),
+        ("literal_replacement", False),
     ],
 )
 async def test_decoding_status_is_not_inferred_from_replacement_character(
-    config, fake_adb, key, errors
+    config, fake_adb, mode, errors, monkeypatch
 ):
-    result = await ADBService(config).run(["getprop", key])
+    monkeypatch.setenv("FAKE_ADB_QUERY_MODE", mode)
+    result = await ADBService(config).run(["getprop", "ro.boot.serialno"])
     assert result.decoding_errors is errors and result.capture_complete
     assert (
         ADBService(config)
@@ -105,7 +110,7 @@ async def test_decoding_status_is_not_inferred_from_replacement_character(
 
 async def test_invalid_pagination_and_ids(config, fake_adb):
     service = ADBService(config)
-    result = await service.run(["getprop", "ro.test.normal"])
+    result = await service.run(["getprop", "ro.boot.serialno"])
     with pytest.raises(ValueError, match="exceeds"):
         service.store.read(OutputRequest(output_id=result.output_id, start_char=100))
     with pytest.raises(ValueError, match="must not exceed"):
@@ -125,7 +130,7 @@ async def test_invalid_pagination_and_ids(config, fake_adb):
 
 async def test_uncommitted_or_damaged_record_is_not_complete(config, fake_adb):
     service = ADBService(config)
-    result = await service.run(["getprop"])
+    result = await service.run(["getprop", "ro.boot.serialno"])
     directory = config.output_directory / result.output_id
     (directory / "stdout.bin").write_bytes(b"damaged")
     with pytest.raises(ValueError, match="size mismatch"):
@@ -138,14 +143,15 @@ async def test_uncommitted_or_damaged_record_is_not_complete(config, fake_adb):
 async def test_disk_directory_error_has_no_record(config, fake_adb, tmp_path):
     config.output_directory = tmp_path / "not-a-directory"
     config.output_directory.write_bytes(b"preserve this file")
-    result = await ADBService(config).run(["getprop"])
+    result = await ADBService(config).run(["getprop", "ro.boot.serialno"])
     assert result.error_code == "storage_failed" and result.output_id is None
     assert fake_adb == []
     assert config.output_directory.read_bytes() == b"preserve this file"
 
 
-async def test_partial_page_retains_source_error(config, fake_adb):
-    result = await ADBService(config).run(["getprop", "ro.test.fail"])
+async def test_partial_page_retains_source_error(config, fake_adb, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_QUERY_MODE", "fail")
+    result = await ADBService(config).run(["getprop", "ro.boot.serialno"])
     page = ADBService(config).store.read(
         OutputRequest(
             output_id=result.output_id,
@@ -157,3 +163,32 @@ async def test_partial_page_retains_source_error(config, fake_adb):
     assert page.capture_complete and not page.eof
     manifest = json.loads((config.output_directory / result.output_id / "record.json").read_text())
     assert manifest["stdout"] == "partial\r\n"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["getprop"],
+        ["getprop", "vendor.new_property"],
+        ["settings", "list", "secure"],
+        ["settings", "get", "global", "device_name"],
+        ["dumpsys", "display"],
+        ["cmd", "testharness", "enable"],
+    ],
+)
+async def test_saved_output_rechecked_against_current_policy(config, fake_adb, tmp_path, argv):
+    result = await ADBService(config).run(["getprop", "ro.boot.serialno"])
+    directory = config.output_directory / result.output_id
+    record_path = directory / "record.json"
+    record = json.loads(record_path.read_text())
+    record["argv"] = argv
+    record_path.write_text(json.dumps(record))
+    before = calls(tmp_path)
+    for stream in ("stdout", "stderr"):
+        with pytest.raises(ValueError, match="current read-only query list"):
+            OutputStore(config.output_directory, 20, config.read_max_chars).read(
+                OutputRequest(output_id=result.output_id, stream=stream)
+            )
+        assert (directory / f"{stream}.bin").exists()
+    assert calls(tmp_path) == before
+    assert json.loads(record_path.read_text())["argv"] == argv

@@ -31,10 +31,10 @@ async def verify(config_path: Path, server_python: Path, report_path: Path) -> N
                 "adb_read_command_output",
             }
             tool = next(tool for tool in tools if tool.name == "adb_run_adb_shell")
-            for index, argv in enumerate(
+            for index, arguments in enumerate(
                 [
-                    ["getprop", "ro.com.google.clientidbase"],
-                    ["sh", "-c", "id"],
+                    {"command": "getprop", "query": "clientidbase"},
+                    {"command": "ip", "query": "clientidbase"},
                 ]
             ):
                 message = await tool.ainvoke(
@@ -42,7 +42,7 @@ async def verify(config_path: Path, server_python: Path, report_path: Path) -> N
                         "type": "tool_call",
                         "id": f"adapter-check-{index}",
                         "name": tool.name,
-                        "args": {"argv": argv},
+                        "args": arguments,
                     }
                 )
                 outgoing = convert_to_openai_messages([message], text_format="block")[0]

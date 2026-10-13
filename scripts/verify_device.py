@@ -12,15 +12,8 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from adb_mcp.commands import CommandResult, OutputPage
+from adb_mcp.commands import COMMANDS, CommandResult, OutputPage
 from adb_mcp.config import load_config
-
-COMMANDS = [
-    ["getprop", "ro.com.google.clientidbase"],
-    ["settings", "get", "global", "device_name"],
-    ["dumpsys", "display"],
-    ["settings", "get", "secure", "adb_mcp_验收 空格'\"😀"],
-]
 
 
 async def capture_process(*args: str) -> tuple[int, bytes, bytes]:
@@ -69,15 +62,19 @@ async def verify(path: Path, report_path: Path) -> None:
                     separators=(",", ":"),
                 ).encode("utf-8")
             )
-            for argv in COMMANDS:
-                response = await session.call_tool("run_adb_shell", {"argv": argv})
+            for query_name, argv in COMMANDS.items():
+                response = await session.call_tool(
+                    "run_adb_shell", {"command": argv[0], "query": query_name}
+                )
                 assert len(response.content) == 1
                 assert json.loads(response.content[0].text) == response.structuredContent
                 result = CommandResult.model_validate(response.structuredContent)
                 assert not response.isError and result.exit_code == 0, result.error_code
                 assert result.target_serial == config.target_serial
+                assert result.argv == argv
                 assert result.capture_complete and not result.decoding_errors
                 query = result.model_dump(exclude={"stdout", "stderr"})
+                query["query"] = query_name
                 query["return_text_chars"] = len(response.content[0].text)
                 for stream in ("stdout", "stderr"):
                     raw = (
@@ -87,6 +84,21 @@ async def verify(path: Path, report_path: Path) -> None:
                     decoded = raw.decode("utf-8")
                     assert decoded[: config.preview_max_chars_per_stream] == getattr(result, stream)
                 report["queries"].append(query)
+
+            # A fixed read-only shell fixture verifies the actual remote exit-code channel.
+            # Probe while the prepared device session is still active; never expose it as a tool.
+            code, stdout, stderr = await capture_process(
+                config.adb_path,
+                "-s",
+                config.target_serial,
+                "shell",
+                "-T",
+                "-n",
+                "exit 7",
+            )
+            assert code == 7 and stdout == b"" and stderr == b""
+            report["remote_exit_code_probe"] = code
+
     # Restart the server and reconstruct streams only from stored evidence.
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -118,19 +130,6 @@ async def verify(path: Path, report_path: Path) -> None:
                     ).read_bytes()
                     assert "".join(parts) == raw.decode("utf-8")
     report["restart_pagination_verified"] = True
-    # A fixed read-only shell fixture verifies the actual remote exit-code channel.
-    # It is outside the MCP command policy and is never exposed as a tool.
-    code, stdout, stderr = await capture_process(
-        config.adb_path,
-        "-s",
-        config.target_serial,
-        "shell",
-        "-T",
-        "-n",
-        "exit 7",
-    )
-    assert code == 7 and stdout == b"" and stderr == b""
-    report["remote_exit_code_probe"] = code
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))

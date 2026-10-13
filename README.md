@@ -51,28 +51,44 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 
 ### run_adb_shell
 
+按 `adb shell` 后的一级命令分类，输入 `command` 和 `query` 两个枚举参数：
+
 ```json
-{"argv":["getprop","ro.com.google.clientidbase"]}
+{"command":"getprop","query":"clientidbase"}
 ```
 
 ```json
-{"argv":["settings","get","global","device_name"]}
+{"command":"pm","query":"features"}
 ```
 
 ```json
-{"argv":["dumpsys","display"]}
+{"command":"settings","query":"android_id"}
 ```
 
-首版允许以下完整组合：
+只允许以下 5 类、10 个完整命令组合：
 
-- `getprop` 或 `getprop <属性名>`；属性名使用字母、数字、点、下划线、短横线，不能以短横线开头。
-- `settings get <global|system|secure> <键>`；非空键可含 Unicode、空格和单双引号，不能以短横线开头。
-- `settings list <global|system|secure>`。
-- `dumpsys display`，不接受其他服务或附加参数。
+| command | query | 固定设备端命令 |
+|---|---|---|
+| getprop | clientidbase | `getprop ro.com.google.clientidbase` |
+| getprop | boot_serialno | `getprop ro.boot.serialno` |
+| getprop | serialno | `getprop ro.serialno` |
+| getprop | oem_key1 | `getprop ro.oem.key1` |
+| getprop | youtube_cert_scope | `getprop ro.vendor.youtube.cert_scope` |
+| getprop | test_harness_state | `getprop persist.sys.test_harness` |
+| pm | features | `pm list features` |
+| settings | android_id | `settings get secure android_id` |
+| ifconfig | interfaces | `ifconfig` |
+| ip | addresses | `ip addr` |
 
-最多 32 个参数、合计 4096 个 Unicode 字符。禁止控制/格式/代理字符，以及 `; | & < > \` $ \\`。不接受 `sh -c`、`su`、写设置、安装、重启、管道、重定向、串联或任意脚本。规则集中在 `commands.py`；增加合法属性/键不增加工具，增加 dumpsys 服务需先确认其只读参数组合。
+`command` 和 `query` 必须匹配，例如 `ip + clientidbase` 返回 `invalid_command`。命令由服务端固定映射生成，调用方不能传属性名、键名、选项、过滤器或 Shell 字符串。Operator Tier 和 Global Assist 都使用 `pm + features`，从返回文本中查找 `com.google.android.tv` / `GLOBAL_ASSIST_TRIGGERING`；保留完整原始证据，不执行管道或 `grep`。
 
-本机用 `create_subprocess_exec`，设备端命令用 POSIX 逐参数引用后作为一条字符串提交，避免把参数列表误当作设备端转义。使用非 PTY 模式保留两条流和原始行尾。
+`cmd testharness enable` 会恢复出厂，`am start -a android.settings.SETTINGS` 会打开界面，这两类不开放到只读工具。原来允许的全部属性查询、任意属性/设置键、`settings list` 和 `dumpsys display` 已移出权限范围。一级命令分类不授予该类别下其他操作权限。
+
+**输入契约已变更**：旧 `{"argv":[...]}` 调用被拒绝；工具名称、返回 `argv` 和 `adb-command/v1` 保留。客户端须改用两个枚举参数，重启服务并重新发现、绑定工具 Schema。SDK 校验缺失参数、非法枚举值或类型时返回工具错误；有效枚举的错误组合返回结构化 `invalid_command`。
+
+枚举、固定映射及执行/历史读取策略集中在 `commands.py`。新增查询时补 `Query` 枚举、`COMMANDS` 映射、对应测试和文档；已有类别不增加工具。新增一级命令还需更新 `Command` 枚举和简短工具描述，并核对完整命令是否只读。
+
+本机用 `create_subprocess_exec`，设备端命令用 POSIX 逐参数引用后作为一条字符串提交。使用非 PTY 模式保留两条流和原始行尾。
 
 ### 命令结果 adb-command/v1
 
@@ -93,7 +109,7 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 
 工具通过公开 SDK 的 `Annotated[CallToolResult, CommandResult]` 输出 Schema、结构化数据和 `isError`，文本块只包含一份精简 JSON。空属性值加退出码 0 是成功事实，工具不判定 TAM 预期或 PASS/FAIL。非零退出即工具错误，但完整采集的失败命令可以有 `capture_complete=true`。ADB 自身连接/传输失败也可能返回非零码，不能仅凭退出码断言设备端命令确已执行。
 
-命令策略校验拒绝时返回 `invalid_command`、`argv=[]`、`output_id=null` 和简短原因，不回显超长输入，不启动 ADB 或创建记录。通过策略的请求仍保留原始 argv，包括连接或执行失败的请求；工具 Schema 和结果契约版本不变。
+命令策略校验拒绝时返回 `invalid_command`、`argv=[]`、`output_id=null` 和简短原因，不回显超长输入，不启动 ADB 或创建记录。通过策略的请求仍保留固定映射的 argv，包括连接或执行失败的请求；结果契约版本保持不变，输入 Schema 已更新。
 
 错误类别包含 `invalid_command`、`device_not_found`、`device_offline`、`device_unauthorized`、`device_ambiguous`、`device_not_ready`、`connect_failed`、`connect_timeout`、`shell_protocol_unsupported`、`adb_unavailable`、`adb_error`、`command_failed`、`command_timeout`、`cancelled`、`capture_limit`、`capture_failed`、`storage_failed`、`cleanup_failed`。
 
@@ -104,6 +120,8 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 ```
 
 偏移从 0 开始，按解码后 **Unicode 码点**计数（不是字节、UTF-16 单元、token 或行号）。保留 CR/LF；组合字符按各自码点计数。返回 `start_char`、`text`、`next_char`、`eof`、`total_chars`、原记录 `capture_complete` / `decoding_errors` / `error_code`。`next_char` 可直接用于下一页。
+
+每次读取先验证记录中的完整 argv 仍在当前只读名单内；旧宽权限记录会报错，原文件保留。当前允许命令的旧记录仍可跨重启读取，无需迁移。
 
 偏移等于总字符数时返回空文本和 `eof=true`；超过总字符数、负数、错误 stream、非法 ID、超过服务端读取上限均报错。只接受记录 ID，不能传路径。分页成功不覆盖原命令的错误或不完整状态；解码失败时不能用替换后的文本做精确证据比对。短输出直接使用第一次返回，不必额外读取。
 

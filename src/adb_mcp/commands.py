@@ -1,8 +1,6 @@
 """Command policy and the public evidence contract."""
 
-import re
 import shlex
-import unicodedata
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +26,31 @@ ErrorCode = Literal[
     "cleanup_failed",
 ]
 Stream = Literal["stdout", "stderr"]
+Command = Literal["getprop", "pm", "settings", "ifconfig", "ip"]
+Query = Literal[
+    "clientidbase",
+    "boot_serialno",
+    "serialno",
+    "oem_key1",
+    "youtube_cert_scope",
+    "test_harness_state",
+    "features",
+    "android_id",
+    "interfaces",
+    "addresses",
+]
+COMMANDS: dict[Query, list[str]] = {
+    "clientidbase": ["getprop", "ro.com.google.clientidbase"],
+    "boot_serialno": ["getprop", "ro.boot.serialno"],
+    "serialno": ["getprop", "ro.serialno"],
+    "oem_key1": ["getprop", "ro.oem.key1"],
+    "youtube_cert_scope": ["getprop", "ro.vendor.youtube.cert_scope"],
+    "test_harness_state": ["getprop", "persist.sys.test_harness"],
+    "features": ["pm", "list", "features"],
+    "android_id": ["settings", "get", "secure", "android_id"],
+    "interfaces": ["ifconfig"],
+    "addresses": ["ip", "addr"],
+}
 
 
 class CommandError(Exception):
@@ -36,43 +59,16 @@ class CommandError(Exception):
         self.code = code
 
 
-class ShellRequest(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    argv: Annotated[list[str], Field(min_length=1, max_length=32)]
+def resolve_query(command: Command, query: Query) -> list[str]:
+    argv = COMMANDS.get(query)
+    if argv is None or argv[0] != command:
+        raise CommandError("invalid_command", "unsupported command/query combination")
+    return argv.copy()
 
 
 def validate_command(argv: list[str]) -> list[str]:
-    try:
-        argv = ShellRequest(argv=argv).argv
-    except ValueError as exc:
-        raise CommandError("invalid_command", "argv must contain 1–32 strings") from exc
-    if sum(len(arg) for arg in argv) > 4096:
-        raise CommandError("invalid_command", "argv exceeds 4096 characters")
-    if any(any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in arg) for arg in argv):
-        raise CommandError("invalid_command", "control characters are prohibited")
-    if any(any(char in arg for char in ";|&<>`$\\") for arg in argv):
-        raise CommandError("invalid_command", "shell operators and substitutions are prohibited")
-
-    valid = False
-    if argv[0] == "getprop":
-        valid = len(argv) == 1 or (
-            len(argv) == 2
-            and re.fullmatch(r"[A-Za-z0-9_.-]+", argv[1]) is not None
-            and not argv[1].startswith("-")
-        )
-    elif argv[0] == "settings":
-        # No --user, put, delete, reset, or unknown option combinations in v1.
-        if len(argv) >= 3 and argv[2] in {"global", "system", "secure"}:
-            valid = (argv[1] == "list" and len(argv) == 3) or (
-                argv[1] == "get"
-                and len(argv) == 4
-                and bool(argv[3])
-                and not argv[3].startswith("-")
-            )
-    elif argv == ["dumpsys", "display"]:
-        valid = True
-    if not valid:
-        raise CommandError("invalid_command", "unsupported read-only command/argument combination")
+    if not isinstance(argv, list) or argv not in COMMANDS.values():
+        raise CommandError("invalid_command", "command is outside the fixed read-only query list")
     return argv.copy()
 
 
