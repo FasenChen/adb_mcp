@@ -2,6 +2,15 @@
 
 独立的 Python stdio MCP，固定一个 Android USB / 网络目标，提供 **2 个只读查询工具**。基于本目录开发计划完成 P0–P3；宿主任务工具选择、命令证据入库和原 case 端到端验收属于 P4。
 
+当前接口（2026-10-14 核对）：
+
+| Tool | 输入 | 输出 |
+|---|---|---|
+| `run_adb_shell` | 一个必填的 `query` 枚举 | 正常结果直接返回 stdout 原文；错误、stderr 或截断另有提示 |
+| `read_command_output` | 必填记录 ID；流、位置和长度可省略 | 返回已保存输出的文本窗口；有后续内容时附下一次调用参数 |
+
+通常只需调用 `run_adb_shell`。无需传入 ADB 命令字符串、设备地址或类别参数，也无需解析结果正文中的 JSON。完整参数和示例见下文“当前工具输入输出”。
+
 ## 安装与启动
 
 Windows / PowerShell，Python **3.12**，只使用 uv 安装流程。所有操作在本项目目录执行；不借用或修改宿主虚拟环境。
@@ -47,11 +56,15 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 
 服务实例内，同一配置目标的调用串行执行。默认连接、查询与异常清理预算为 45 秒，宿主工具超时应大于该预算，并预留持久化及协议处理时间；并发调用还有锁等待时间。没有跨 MCP 锁或多设备队列。ADB 客户端可能自行启动未运行的 ADB daemon；服务不显式执行 `start-server` / `kill-server`，不修复其他服务。
 
-## 工具和命令边界
+## 当前工具输入输出
 
 ### run_adb_shell
 
-只传一个查询枚举：
+执行一个固定目标上的只读查询。只传一个查询枚举：
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `query` | string，enum | 是 | 从下表 10 个选项中选择；没有默认值 |
 
 ```json
 {"query":"clientidbase"}
@@ -90,12 +103,47 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 
 正常、完整且无 stderr 或解码异常时，只返回一个文本块，内容等于 stdout 原文；不包裹 JSON，不 trim 或改写换行。成功但值为空时，文本为空且 `isError=false`，不冒充命令失败。
 
+例如输入 `{"query":"clientidbase"}`，调用方看到的文本可以是（示意值，实际由设备返回）：
+
+```text
+example_client_id
+```
+
+MCP 仍使用协议结果封装文本。上述示例对应：
+
+```json
+{
+  "content": [{"type": "text", "text": "example_client_id\n"}],
+  "isError": false
+}
+```
+
+正文是 `content[0].text`，不是含 stdout、时间等字段的 JSON 对象；没有 `structuredContent` 或 `outputSchema`。正常短结果不附记录 ID。调用方检查协议 `isError`，并保留其他文本块中的必要提示。
+
 只有需要说明时才增加独立文本块：
 
 - stderr 非空：追加 `[stderr]` 文本块，保留其原文，与 stdout 分开。
 - 命令失败：`isError=true`，追加 `[adb_mcp]` 提示，含错误分类、退出码及简短说明；已取得的 stdout/stderr 仍保留。非法 query、缺失参数或类型错误由 SDK 拒绝，不执行 ADB。
 - 输出预览截断：标明对应流已截断，并给出 `read_command_output` 的完整补读参数；`start_char` 从已显示的 Unicode 码点数开始。
 - 采集不完整或解码失败：明确标明 `capture_complete=false` / `decoding_errors=true`。补读只能取得已保存部分，不能恢复未采集的尾部。
+
+命令非零退出时，第一块仍为已取得的 stdout；第二块在 stderr 非空时出现，错误说明位于独立的 `[adb_mcp]` 块，协议 `isError=true`。例如以下三块文本（模拟场景，不是当前设备验收结果）：
+
+```text
+partial
+```
+
+```text
+[stderr]
+remote error
+```
+
+```text
+[adb_mcp]
+error=command_failed; exit_code=7; ADB shell exited with a nonzero status
+```
+
+输入校验失败的错误文本由 SDK 生成，不保证使用上述前缀；同样以协议 `isError=true` 表示失败。成功时 stderr 非空只追加该流的文本，不单凭 stderr 判断失败。
 
 补读提示示例（ID 为占位值）：
 
@@ -105,19 +153,37 @@ stdout_truncated=true
 read_command_output {"output_id":"<32_HEX_RECORD_ID>","stream":"stdout","start_char":6000}
 ```
 
-工具不再返回 `structuredContent` 或输出 Schema；设备、argv、时间、退出码、字节数、记录 ID 和完整性等元数据继续保存到本地 `record.json`，内部记录格式仍为 `adb-command/v1`。正常短结果不附记录 ID；只有需要补读时才将 ID 和位置送入调用上下文。成功执行只代表取得事实，不判定 TAM 预期或 PASS/FAIL；空属性值加退出码 0 是成功事实。
+设备、argv、时间、退出码、字节数、记录 ID 和完整性等元数据继续保存到本地 `record.json`，内部记录格式仍为 `adb-command/v1`。只有需要补读时才将 ID 和位置送入调用上下文。成功执行只代表取得事实，不判定 TAM 预期或 PASS/FAIL；空属性值加退出码 0 是成功事实。
 
 **接口已精简**：旧 argv 请求必须改为 query；旧 command 字段无需再传。客户端应重启 MCP 并重新发现、绑定工具，且停止对返回文本做 JSON 解析或读取 structuredContent。FastMCP 对额外字段按 SDK 默认行为忽略，它们不参与命令生成。错误以协议 `isError` 和独立文本提示表示。
 
 ### read_command_output
 
-仅在需要补读时使用提示中的参数；max_chars 可省略，使用配置上限内的默认值：
+读取已保存的 stdout 或 stderr，不执行 ADB。仅在需要补读时使用提示中的参数。
+
+| 参数 | 类型 | 必填 | 默认值 / 约束 |
+|---|---|---|---|
+| `output_id` | string | 是 | 32 位小写十六进制 ID，匹配 `^[0-9a-f]{32}$`；不能传文件路径 |
+| `stream` | string，enum | 否 | `stdout`；可选 `stdout` / `stderr` |
+| `start_char` | integer | 否 | `0`；必须 ≥ 0，按 Unicode 码点计数 |
+| `max_chars` | integer | 否 | `min(6000, read_max_chars)`；范围为 1 到配置的 `read_max_chars`，默认配置上限为 12000 |
+
+只有 ID 必填。通常照着截断提示调用，无需自己计算位置；示例中的 ID 是占位值，须替换为提示中的实际 ID：
 
 ```json
 {"output_id":"<32_HEX_RECORD_ID>","stream":"stdout","start_char":6000}
 ```
 
-返回的第一个文本块是请求窗口内的原文。还有后续文本时，独立提示块包含下一次调用参数，start_char 是当前窗口结束位置；最后一页不附分页元数据。保留 CR/LF，偏移按 UTF-8 解码后的 Unicode 码点计数，不是字节、UTF-16 单元、token 或行号。
+读取成功时，第一个文本块是请求窗口内的原文。还有后续文本时，独立提示块包含下一次调用参数，start_char 是当前窗口结束位置；最后一页不附分页元数据。保留 CR/LF，偏移按 UTF-8 解码后的 Unicode 码点计数，不是字节、UTF-16 单元、token 或行号。
+
+例如读取记录 `0123456789abcdef0123456789abcdef` 的 stdout，从位置 6000 取到 12000，仍有后续内容时，返回的提示块为：
+
+```text
+[adb_mcp]
+read_command_output {"output_id":"0123456789abcdef0123456789abcdef","stream":"stdout","start_char":12000}
+```
+
+该 ID 和位置均为示例。正常最后一页只有原文；若原命令存在错误、采集不完整或解码异常，最后一页仍会保留相应提示。
 
 原命令失败、原采集不完整或解码异常仍明确提示。读取已保存的失败命令可以成功（`isError=false`，`source_error=...` 表示原命令错误）；非法 ID、读取越界、存储损坏等读取错误则标记 `isError=true`。偏移等于总字符数返回空文本；超过总字符数、负数、错误 stream 或超过读取上限均报错。
 
@@ -136,7 +202,7 @@ data/command-outputs/<output_id>/
 
 超时、取消、采集失败、磁盘错误或超出合计上限会终止本机 ADB 并等待进程和管道收尾。取消保留已取得的输出及原始取消异常；stdio 调用方收到协议取消响应而非正常工具结果，已保存记录 ID 写入 stderr 诊断日志，可稍后读取。清理未确认时阻断本实例后续设备操作并返回 `cleanup_failed`，需人工检查残留进程后重启服务。终止本机 ADB 不证明设备端命令已停止，服务不自动重放查询。
 
-元数据使用临时文件加原子替换，落盘失败返回 `output_id=null` / `storage_failed`。记录跨服务重启可读。历史不自动清理；仅在人工确认需要后，归档或删除 `output_directory` 下对应记录 ID 的整目录（两条原始流及元数据一起处理），不要只删除某一条流。运行账号需要目录创建/读写权限；继承操作系统权限，不额外开放访问。记录可能含设备信息或私有设置，应按项目证据保留策略保护；`data/`、真实 `config.json`、`.venv` 均忽略，不提交 Git。
+元数据使用临时文件加原子替换。落盘失败时，工具以 `isError=true` 和 `storage_failed` 文本提示报错，不返回可用于补读的 ID；内部结果的 output_id 为 null。记录跨服务重启可读。历史不自动清理；仅在人工确认需要后，归档或删除 `output_directory` 下对应记录 ID 的整目录（两条原始流及元数据一起处理），不要只删除某一条流。运行账号需要目录创建/读写权限；继承操作系统权限，不额外开放访问。记录可能含设备信息或私有设置，应按项目证据保留策略保护；`data/`、真实 `config.json`、`.venv` 均忽略，不提交 Git。
 
 ## 验证
 
