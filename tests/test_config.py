@@ -73,3 +73,33 @@ def test_absolute_adb_path_keeps_selected_executable(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"target": {"serial": "test"}, "adb_path": str(executable)}))
     assert load_config(path).adb_path == str(executable)
+
+
+@pytest.mark.parametrize(
+    "commands",
+    [
+        "adb shell ifconfig",
+        [1],
+        ["ifconfig"],
+        ["adb shell"],
+        ["adb shell "],
+        ["adb shell -s other-device ifconfig"],
+        ["adb shell ifconfig\n"],
+        ["adb shell ifconfig\x00"],
+        ["adb shell ifconfig; reboot"],
+        ["adb shell ifconfig | cat"],
+        ["adb shell getprop $(id)"],
+        ["adb shell getprop 'unterminated"],
+    ],
+)
+def test_invalid_allowlist_is_rejected(commands):
+    with pytest.raises(ValidationError):
+        Config(target={"serial": "test"}, allowed_commands=commands)
+
+
+def test_allowlist_preserves_exact_strings_and_defaults_to_deny():
+    command = "adb shell  ifconfig "
+    assert Config(target={"serial": "test"}, allowed_commands=[command]).allowed_commands == [
+        command
+    ]
+    assert Config(target={"serial": "test"}).allowed_commands == []

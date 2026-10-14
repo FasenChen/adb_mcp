@@ -37,8 +37,8 @@ async def verify(config_path: Path, server_python: Path, report_path: Path) -> N
             tool = next(tool for tool in tools if tool.name == "adb_run_adb_shell")
             for index, arguments in enumerate(
                 [
-                    {"query": "clientidbase"},
-                    {"query": "unsupported"},
+                    {"command": "adb shell getprop ro.com.google.clientidbase"},
+                    {"command": "unsupported"},
                 ]
             ):
                 before = set(output_directory.glob("*/record.json"))
@@ -60,7 +60,7 @@ async def verify(config_path: Path, server_python: Path, report_path: Path) -> N
                     record = json.loads(records.pop().read_text(encoding="utf-8"))
                     assert content[0]["text"] == record["stdout"]
                 else:
-                    assert "unsupported" in content[0]["text"] and not records
+                    assert "allowlist" in content[0]["text"] and not records
                 assert message.artifact is None
                 assert "artifact" not in outgoing
                 observations.append(

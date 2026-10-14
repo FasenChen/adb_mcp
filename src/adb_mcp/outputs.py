@@ -13,7 +13,8 @@ from .commands import (
     OutputPage,
     OutputRequest,
     Stream,
-    validate_command,
+    command_args,
+    resolve_command,
 )
 
 
@@ -81,10 +82,13 @@ class Capture:
 
 
 class OutputStore:
-    def __init__(self, directory: Path, preview_chars: int, read_max_chars: int):
+    def __init__(
+        self, directory: Path, preview_chars: int, read_max_chars: int, allowed_commands: list[str]
+    ):
         self.directory = directory
         self.preview_chars = preview_chars
         self.read_max_chars = read_max_chars
+        self.allowed_commands = allowed_commands
 
     def begin(self, max_bytes: int) -> Capture:
         return Capture(self.directory, max_bytes)
@@ -120,11 +124,17 @@ class OutputStore:
             if record.output_id != request.output_id:
                 raise ValueError("record ID mismatch")
             try:
-                validate_command(record.argv)
+                if record.command is not None:
+                    allowed = resolve_command(record.command, self.allowed_commands) == record.argv
+                else:
+                    # Older records have argv only; keep reads when those arguments remain allowed.
+                    allowed = any(
+                        record.argv == command_args(command) for command in self.allowed_commands
+                    )
+                if not allowed:
+                    raise ValueError("saved command is outside the current allowlist")
             except CommandError as exc:
-                raise ValueError(
-                    "saved command is outside the current read-only query list"
-                ) from exc
+                raise ValueError("saved command is outside the current allowlist") from exc
             for stream in ("stdout", "stderr"):
                 if (directory / f"{stream}.bin").stat().st_size != getattr(
                     record, f"{stream}_bytes"

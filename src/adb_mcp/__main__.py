@@ -10,7 +10,7 @@ from .server import create_server
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Read-only fixed-target ADB MCP (stdio)")
+    parser = argparse.ArgumentParser(description="Allowlisted fixed-target ADB MCP (stdio)")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--check-config", action="store_true", help="validate without starting ADB")
     args = parser.parse_args()

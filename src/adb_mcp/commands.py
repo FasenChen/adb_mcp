@@ -1,4 +1,4 @@
-"""Fixed read-only queries and local evidence models."""
+"""Exact command allowlist and local evidence models."""
 
 import shlex
 from typing import Annotated, Literal
@@ -26,30 +26,6 @@ ErrorCode = Literal[
     "cleanup_failed",
 ]
 Stream = Literal["stdout", "stderr"]
-Query = Literal[
-    "clientidbase",
-    "boot_serialno",
-    "serialno",
-    "oem_key1",
-    "youtube_cert_scope",
-    "test_harness_state",
-    "features",
-    "android_id",
-    "interfaces",
-    "addresses",
-]
-COMMANDS: dict[Query, list[str]] = {
-    "clientidbase": ["getprop", "ro.com.google.clientidbase"],
-    "boot_serialno": ["getprop", "ro.boot.serialno"],
-    "serialno": ["getprop", "ro.serialno"],
-    "oem_key1": ["getprop", "ro.oem.key1"],
-    "youtube_cert_scope": ["getprop", "ro.vendor.youtube.cert_scope"],
-    "test_harness_state": ["getprop", "persist.sys.test_harness"],
-    "features": ["pm", "list", "features"],
-    "android_id": ["settings", "get", "secure", "android_id"],
-    "interfaces": ["ifconfig"],
-    "addresses": ["ip", "addr"],
-}
 
 
 class CommandError(Exception):
@@ -58,17 +34,24 @@ class CommandError(Exception):
         self.code = code
 
 
-def resolve_query(query: Query) -> list[str]:
-    argv = COMMANDS.get(query)
-    if argv is None:
-        raise CommandError("invalid_command", "unsupported query")
-    return argv.copy()
+def command_args(command: str) -> list[str]:
+    """Parse configured commands; execution never uses a local shell."""
+    if not command.startswith("adb shell ") or any(ord(char) < 32 for char in command):
+        raise ValueError("commands must start with 'adb shell ' and contain no control characters")
+    if any(char in command for char in ";|&<>`$"):
+        raise ValueError("shell operators and substitutions are not supported")
+    argv = shlex.split(command)[2:]
+    if not argv or not argv[0] or argv[0].startswith("-"):
+        raise ValueError("commands must include a device-side executable, not ADB options")
+    return argv
 
 
-def validate_command(argv: list[str]) -> list[str]:
-    if not isinstance(argv, list) or argv not in COMMANDS.values():
-        raise CommandError("invalid_command", "command is outside the fixed read-only query list")
-    return argv.copy()
+def resolve_command(command: str, allowed_commands: list[str]) -> list[str]:
+    if not isinstance(command, str) or command not in allowed_commands:
+        raise CommandError(
+            "invalid_command", "command does not exactly match the configured allowlist"
+        )
+    return command_args(command)
 
 
 def shell_command(argv: list[str]) -> str:
@@ -82,6 +65,7 @@ class CommandResult(BaseModel):
     output_id: str | None = None
     target_serial: str
     argv: list[str]
+    command: str | None = None
     started_at: str
     finished_at: str
     duration_ms: int

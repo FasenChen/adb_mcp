@@ -15,9 +15,7 @@ from .commands import (
     CommandResult,
     OutputPage,
     OutputRequest,
-    Query,
     Stream,
-    resolve_query,
 )
 from .config import Config
 
@@ -75,16 +73,18 @@ def create_server(config: Config) -> FastMCP:
     )
 
     @server.tool(
-        annotations=annotations,
-        description="Run a fixed-target read-only query and return raw stdout. "
+        annotations=ToolAnnotations(openWorldHint=True),
+        description="Run a command that exactly matches allowed_commands in the config, "
+        "including the 'adb shell ' prefix, case and whitespace, and return raw stdout. "
+        "The device is fixed by the config. "
         "Errors, stderr and incomplete/truncated output are reported separately; "
         "continuation includes read_command_output arguments.",
     )
     async def run_adb_shell(
-        query: Query,
+        command: str,
     ) -> CallToolResult:
         try:
-            result = await service.run(resolve_query(query))
+            result = await service.run(command)
         except CommandError as exc:
             raise ToolError(str(exc)) from exc
         return tool_result(result)

@@ -1,6 +1,9 @@
 {
   "adb_path": "D:/platform-tools/adb.exe",
-  "target": {"host": "<TV_IP>", "port": 5555},
+  "target": {
+    "host": "<TV_IP>",
+    "port": 5555
+  },
   "auto_connect": true,
   "connect_timeout_seconds": 10,
   "command_timeout_seconds": 30,
@@ -8,5 +11,17 @@
   "preview_max_chars_per_stream": 6000,
   "read_max_chars": 12000,
   "max_capture_bytes": 16777216,
-  "output_directory": "./data/command-outputs"
+  "output_directory": "./data/command-outputs",
+  "allowed_commands": [
+    "adb shell getprop ro.com.google.clientidbase",
+    "adb shell getprop ro.boot.serialno",
+    "adb shell getprop ro.serialno",
+    "adb shell getprop ro.oem.key1",
+    "adb shell getprop ro.vendor.youtube.cert_scope",
+    "adb shell getprop persist.sys.test_harness",
+    "adb shell pm list features",
+    "adb shell settings get secure android_id",
+    "adb shell ifconfig",
+    "adb shell ip addr"
+  ]
 }

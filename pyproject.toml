@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "adb-query-mcp"
 version = "0.1.0"
-description = "Fixed-target, read-only ADB queries over MCP stdio"
+description = "Fixed-target, exact-allowlisted ADB commands over MCP stdio"
 requires-python = ">=3.12,<3.13"
 dependencies = ["mcp==1.30.0", "pydantic==2.14.1", "anyio==4.15.1"]
 

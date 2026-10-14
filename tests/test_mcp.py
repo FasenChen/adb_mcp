@@ -1,16 +1,17 @@
 import asyncio
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
 import pytest
+from conftest import ALLOWED_COMMANDS
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
 
-from adb_mcp.commands import COMMANDS
 from adb_mcp.config import Config
 from adb_mcp.server import create_server
 
@@ -23,6 +24,7 @@ def parameters(tmp_path):
         json.dumps(
             {
                 "adb_path": "fake-adb",
+                "allowed_commands": ALLOWED_COMMANDS,
                 "target": {"serial": "test-device"},
                 "output_directory": "outputs",
                 "preview_max_chars_per_stream": 20,
@@ -55,18 +57,48 @@ async def test_stdio_all_fixed_queries(tmp_path, monkeypatch):
     async with stdio_client(parameters(tmp_path)) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            for query, argv in COMMANDS.items():
-                result = await session.call_tool("run_adb_shell", {"query": query})
+            for command in ALLOWED_COMMANDS:
+                argv = shlex.split(command)[2:]
+                result = await session.call_tool("run_adb_shell", {"command": command})
                 assert not result.isError
                 assert latest_record(tmp_path)["argv"] == argv
                 assert verify_text_result(result) == latest_record(tmp_path)["stdout"]
-    import shlex
-
     from conftest import calls
 
     assert [shlex.split(args[-1]) for args in calls(tmp_path) if "shell" in args] == list(
-        COMMANDS.values()
+        shlex.split(command)[2:] for command in ALLOWED_COMMANDS
     )
+
+
+async def test_stdio_uses_configured_exact_allowlist(tmp_path, monkeypatch):
+    from conftest import calls
+
+    monkeypatch.setenv("FAKE_ADB_LOG", str(tmp_path / "adb.log"))
+    params = parameters(tmp_path)
+    path = tmp_path / "config.json"
+    config = json.loads(path.read_text())
+    command = "adb shell getprop 'vendor.new property'"
+    config["allowed_commands"] = [command]
+    path.write_text(json.dumps(config))
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            for rejected in [
+                "adb shell getprop vendor.new property",
+                command + " ",
+                command + "\n",
+                command + "; reboot",
+                "adb shell ifconfig",
+            ]:
+                response = await session.call_tool("run_adb_shell", {"command": rejected})
+                assert response.isError and calls(tmp_path) == []
+                assert not (tmp_path / "outputs").exists()
+            response = await session.call_tool("run_adb_shell", {"command": command})
+            assert not response.isError
+            record = latest_record(tmp_path)
+            assert record["command"] == command
+            assert record["argv"] == ["getprop", "vendor.new property"]
+            assert shlex.split(calls(tmp_path)[-1][-1]) == record["argv"]
 
 
 async def test_stdio_initialize_list_call_and_error(tmp_path, monkeypatch):
@@ -79,30 +111,33 @@ async def test_stdio_initialize_list_call_and_error(tmp_path, monkeypatch):
                 "run_adb_shell",
                 "read_command_output",
             }
-            assert all(
-                tool.outputSchema is None and tool.annotations.readOnlyHint for tool in listed.tools
+            assert all(tool.outputSchema is None for tool in listed.tools)
+            normal = await session.call_tool(
+                "run_adb_shell", {"command": "adb shell getprop ro.boot.serialno"}
             )
-            normal = await session.call_tool("run_adb_shell", {"query": "boot_serialno"})
             assert not normal.isError
             normal_record = latest_record(tmp_path)
             assert verify_text_result(normal) == "ro.boot.serialno\r\n"
             assert len(normal.content) == 1
             assert normal_record["stdout"] == "ro.boot.serialno\r\n"
             assert normal_record["argv"] == ["getprop", "ro.boot.serialno"]
-            failed = await session.call_tool("run_adb_shell", {"query": "oem_key1"})
+            failed = await session.call_tool(
+                "run_adb_shell", {"command": "adb shell getprop ro.oem.key1"}
+            )
             failed_record = latest_record(tmp_path)
             assert failed.isError and failed_record["exit_code"] == 7
             assert failed_record["argv"] == ["getprop", "ro.oem.key1"]
             verify_text_result(failed)
-            invalid = await session.call_tool("run_adb_shell", {"query": "unsupported"})
+            invalid = await session.call_tool("run_adb_shell", {"command": "unsupported"})
             assert invalid.isError and invalid.structuredContent is None
             for arguments in [
                 {"argv": ["getprop", "ro.boot.serialno"]},
-                {"query": "testharness_enable"},
-                {"query": "open_settings"},
-                {"query": "arbitrary_shell"},
-                {"query": 1},
-                {"query": ["boot_serialno"]},
+                {"query": "boot_serialno"},
+                {"command": "testharness_enable"},
+                {"command": "open_settings"},
+                {"command": "arbitrary_shell"},
+                {"command": 1},
+                {"command": ["boot_serialno"]},
                 {},
             ]:
                 assert (await session.call_tool("run_adb_shell", arguments)).isError
@@ -131,7 +166,7 @@ async def test_stdio_initialize_list_call_and_error(tmp_path, monkeypatch):
                 assert result.isError
 
 
-async def test_stdio_oversized_enum_error_is_bounded_without_adb(tmp_path, monkeypatch):
+async def test_stdio_oversized_command_error_is_bounded_without_adb(tmp_path, monkeypatch):
     log = tmp_path / "adb.log"
     monkeypatch.setenv("FAKE_ADB_LOG", str(log))
     async with stdio_client(parameters(tmp_path)) as (read, write):
@@ -140,7 +175,7 @@ async def test_stdio_oversized_enum_error_is_bounded_without_adb(tmp_path, monke
             response = await session.call_tool(
                 "run_adb_shell",
                 {
-                    "query": "x" * 100000,
+                    "command": "x" * 100000,
                 },
             )
             assert response.isError
@@ -157,7 +192,7 @@ async def test_stdio_saved_output_survives_server_restart(tmp_path):
             result = await session.call_tool(
                 "run_adb_shell",
                 {
-                    "query": "boot_serialno",
+                    "command": "adb shell getprop ro.boot.serialno",
                 },
             )
             assert not result.isError and verify_text_result(result) == "ro.boot.serialno\r\n"
@@ -194,7 +229,9 @@ async def test_stdio_raw_output_and_only_required_notices(
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result = await session.call_tool("run_adb_shell", {"query": "boot_serialno"})
+            result = await session.call_tool(
+                "run_adb_shell", {"command": "adb shell getprop ro.boot.serialno"}
+            )
             record = latest_record(tmp_path)
             assert result.isError is is_error
             assert verify_text_result(result) == record["stdout"]
@@ -248,19 +285,20 @@ async def test_stdio_raw_output_and_only_required_notices(
                 assert "decoding_errors=true" in page.content[-1].text
 
 
-async def test_schema_only_exposes_query_enum_and_no_output_metadata(tmp_path):
+async def test_schema_only_exposes_command_and_no_output_metadata(tmp_path):
     config = Config(target={"serial": "test-device"}, output_directory=tmp_path)
     schemas = [tool.model_dump(mode="json") for tool in await create_server(config).list_tools()]
     assert len(schemas) == 2
     text = json.dumps(schemas)
     assert "ro.com.google.clientidbase" not in text
-    assert "vendor.new_property" not in text
     schema = next(tool["inputSchema"] for tool in schemas if tool["name"] == "run_adb_shell")
-    assert schema["required"] == ["query"]
-    assert set(schema["properties"]) == {"query"}
+    assert schema["required"] == ["command"]
+    assert set(schema["properties"]) == {"command"}
+    assert schema["properties"]["command"]["type"] == "string"
     assert all(tool["outputSchema"] is None for tool in schemas)
     assert "stdout_bytes" not in text and "started_at" not in text
-    assert len(schema["properties"]["query"]["enum"]) == 10
+    run_tool = next(tool for tool in schemas if tool["name"] == "run_adb_shell")
+    assert run_tool["annotations"]["readOnlyHint"] is None
 
 
 @pytest.mark.parametrize("port", [True, "5555"])
@@ -325,7 +363,7 @@ async def test_stdio_protocol_cancel_commits_partial_and_accepts_next_query(tmp_
                 method="tools/call",
                 params={
                     "name": "run_adb_shell",
-                    "arguments": {"query": "boot_serialno"},
+                    "arguments": {"command": "adb shell getprop ro.boot.serialno"},
                 },
             )
         )
@@ -350,7 +388,7 @@ async def test_stdio_protocol_cancel_commits_partial_and_accepts_next_query(tmp_
                 method="tools/call",
                 params={
                     "name": "run_adb_shell",
-                    "arguments": {"query": "serialno"},
+                    "arguments": {"command": "adb shell getprop ro.serialno"},
                 },
             )
         )
@@ -368,7 +406,9 @@ async def test_stdio_restart_rejects_output_outside_current_policy(tmp_path):
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result = await session.call_tool("run_adb_shell", {"query": "boot_serialno"})
+            result = await session.call_tool(
+                "run_adb_shell", {"command": "adb shell getprop ro.boot.serialno"}
+            )
             assert not result.isError and verify_text_result(result) == "ro.boot.serialno\r\n"
             output_id = latest_record(tmp_path)["output_id"]
     record_path = tmp_path / "outputs" / output_id / "record.json"
@@ -379,5 +419,5 @@ async def test_stdio_restart_rejects_output_outside_current_policy(tmp_path):
         async with ClientSession(read, write) as session:
             await session.initialize()
             page = await session.call_tool("read_command_output", {"output_id": output_id})
-            assert page.isError and "current read-only query list" in page.content[0].text
+            assert page.isError and "current allowlist" in page.content[0].text
     assert record_path.exists()

@@ -8,6 +8,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .commands import command_args
+
 
 class USBTarget(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -45,6 +47,7 @@ class Config(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     adb_path: str = "adb"
     target: USBTarget | NetworkTarget
+    allowed_commands: list[str] = Field(default_factory=list)
     auto_connect: bool = True
     connect_timeout_seconds: Annotated[float, Field(gt=0, le=120)] = 10
     command_timeout_seconds: Annotated[float, Field(gt=0, le=600)] = 30
@@ -53,6 +56,13 @@ class Config(BaseModel):
     read_max_chars: Annotated[int, Field(ge=1, le=48000)] = 12000
     max_capture_bytes: Annotated[int, Field(ge=1, le=268435456)] = 16777216
     output_directory: Path = Path("data/command-outputs")
+
+    @field_validator("allowed_commands")
+    @classmethod
+    def validate_allowed_commands(cls, values: list[str]) -> list[str]:
+        for command in values:
+            command_args(command)
+        return values
 
     @field_validator("adb_path")
     @classmethod

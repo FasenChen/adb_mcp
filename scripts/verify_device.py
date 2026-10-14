@@ -1,10 +1,11 @@
-"""Opt-in, real-device acceptance via the public MCP SDK; save local evidence."""
+"""Opt-in acceptance of configured commands via the MCP SDK; review side effects first."""
 
 import argparse
 import asyncio
 import hashlib
 import json
 import os
+import shlex
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from adb_mcp.commands import COMMANDS, CommandResult
+from adb_mcp.commands import CommandResult
 from adb_mcp.config import load_config
 
 
@@ -63,9 +64,10 @@ async def verify(path: Path, report_path: Path) -> None:
                     separators=(",", ":"),
                 ).encode("utf-8")
             )
-            for query_name, argv in COMMANDS.items():
+            for command in config.allowed_commands:
+                argv = shlex.split(command)[2:]
                 before = set(config.output_directory.glob("*/record.json"))
-                response = await session.call_tool("run_adb_shell", {"query": query_name})
+                response = await session.call_tool("run_adb_shell", {"command": command})
                 assert response.structuredContent is None
                 records = set(config.output_directory.glob("*/record.json")) - before
                 assert len(records) == 1
@@ -76,7 +78,7 @@ async def verify(path: Path, report_path: Path) -> None:
                 assert result.argv == argv
                 assert result.capture_complete and not result.decoding_errors
                 query = result.model_dump(exclude={"stdout", "stderr"})
-                query["query"] = query_name
+                assert result.command == command
                 query["return_text_chars"] = sum(len(block.text) for block in response.content)
                 for stream in ("stdout", "stderr"):
                     raw = (

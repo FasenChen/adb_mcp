@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import anyio
 
-from .commands import CommandError, CommandResult, Stream, shell_command, validate_command
+from .commands import CommandError, CommandResult, Stream, resolve_command, shell_command
 from .config import Config, NetworkTarget
 from .outputs import Capture, OutputStore
 
@@ -20,7 +20,10 @@ class ADBService:
     def __init__(self, config: Config):
         self.config = config
         self.store = OutputStore(
-            config.output_directory, config.preview_max_chars_per_stream, config.read_max_chars
+            config.output_directory,
+            config.preview_max_chars_per_stream,
+            config.read_max_chars,
+            config.allowed_commands,
         )
         self._lock = asyncio.Lock()
         self._cleanup_failed = False
@@ -204,15 +207,16 @@ class ADBService:
                 "shell_v2 is required for separate streams/exit status",
             )
 
-    async def run(self, argv: list[str]) -> CommandResult:
+    async def run(self, command: str) -> CommandResult:
         # Reject before any process submission; serialize all work for the fixed target.
-        argv = validate_command(argv)
+        argv = resolve_command(command, self.config.allowed_commands)
         async with self._lock:
             started = datetime.now(UTC).isoformat()
             clock = time.monotonic()
             result = CommandResult(
                 target_serial=self.config.target_serial,
                 argv=argv,
+                command=command,
                 started_at=started,
                 finished_at=started,
                 duration_ms=0,

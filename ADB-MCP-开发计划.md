@@ -1,6 +1,6 @@
 # 独立 ADB MCP 开发计划
 
-> 2026-10-13 最新确认需求：对外只传一个 query 枚举，正常结果直接返回 stdout 原文；错误、stderr、截断或解码异常才追加提示。一级命令分类留在内部固定映射中，仍仅开放 getprop、pm、settings、ifconfig、ip 共 10 项只读查询；cmd / am 不开放。设备、时间等完整元数据继续保存本地，不再作为 MCP structuredContent 或输出 Schema。以下 argv / command+query 输入、完整 JSON 返回及任意属性/设置键、dumpsys display 描述属于历史方案，当前接口以 README 为准。历史读取核对当前命令策略，保留文件，P4 未实施。
+> 2026-10-14 最新确认需求：白名单由 config.json 的 allowed_commands 配置，填写完整字符串（如 adb shell ifconfig）；run_adb_shell 接收 command，只有逐字符精确匹配才执行，不去空格、不改大小写、不做前缀匹配。示例保留此前 10 项查询；新增指令不需改代码。固定目标、双流原文保存、退出状态及补读沿用。白名单不自动保证只读；旧 query 接口及下文的固定枚举/类别方案均为历史方案，当前以 README 为准。P4 未实施。
 
 日期：2026-10-13。本文可直接作为新项目的开发输入。以下接口、默认值和阶段划分为建议方案；当前实现和执行记录中的事实单独标注。
 

@@ -1,15 +1,15 @@
 # ADB Query MCP
 
-独立的 Python stdio MCP，固定一个 Android USB / 网络目标，提供 **2 个只读查询工具**。基于本目录开发计划完成 P0–P3；宿主任务工具选择、命令证据入库和原 case 端到端验收属于 P4。
+独立的 Python stdio MCP，固定一个 Android USB / 网络目标，提供 **1 个白名单命令执行工具和 1 个历史输出读取工具**。基于本目录开发计划完成 P0–P3；宿主任务工具选择、命令证据入库和原 case 端到端验收属于 P4。
 
 当前接口（2026-10-14 核对）：
 
 | Tool | 输入 | 输出 |
 |---|---|---|
-| `run_adb_shell` | 一个必填的 `query` 枚举 | 正常结果直接返回 stdout 原文；错误、stderr 或截断另有提示 |
+| `run_adb_shell` | 必填完整指令字符串 `command` | 正常结果直接返回 stdout 原文；错误、stderr 或截断另有提示 |
 | `read_command_output` | 必填记录 ID；流、位置和长度可省略 | 返回已保存输出的文本窗口；有后续内容时附下一次调用参数 |
 
-通常只需调用 `run_adb_shell`。无需传入 ADB 命令字符串、设备地址或类别参数，也无需解析结果正文中的 JSON。完整参数和示例见下文“当前工具输入输出”。
+通常只需调用 `run_adb_shell`。传入与配置白名单逐字符相同的完整指令；设备地址由配置固定，不随调用切换。无需解析结果正文中的 JSON。完整参数和示例见下文“当前工具输入输出”。
 
 ## 安装与启动
 
@@ -40,6 +40,7 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 
 | 配置 | 默认值 / 约束 |
 |---|---|
+| allowed_commands | 完整指令字符串列表；省略或空列表时不允许执行任何命令 |
 | adb_path | `adb`，也可使用完整可执行文件路径 |
 | auto_connect | `true`；仅网络目标缺席时执行一次 connect |
 | connect_timeout_seconds | 10；设备列表、connect、再次检查、features 共用这一预算 |
@@ -52,7 +53,7 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 
 带路径分隔符的相对 `adb_path`（包括 `./adb.exe` 和 `.\adb.exe`）相对配置文件解析；裸 `adb` 或 `adb.exe` 通过 PATH 查找。IPv6 网络目标使用 `[host]:port`。示例配置中的 `<TV_IP>` 是待替换占位值，不能直接运行。
 
-每个 shell 查询始终使用 `adb -s <完整目标> shell -T -n <已引用的命令字符串>`。精确目标必须在 `adb devices -l` 中唯一且状态为 `device`；其他设备数量不影响选定目标。USB 不 connect；offline / unauthorized / 重复目标条目明确报错。要求该目标支持 `shell_v2`；旧协议不执行查询，以避免伪造退出码或混合 stdout/stderr。
+每个 shell 查询始终使用 `adb -s <完整目标> shell -T -n <已引用的设备端命令字符串>`。精确目标必须在 `adb devices -l` 中唯一且状态为 `device`；其他设备数量不影响选定目标。USB 不 connect；offline / unauthorized / 重复目标条目明确报错。要求该目标支持 `shell_v2`；旧协议不执行查询，以避免伪造退出码或混合 stdout/stderr。
 
 服务实例内，同一配置目标的调用串行执行。默认连接、查询与异常清理预算为 45 秒，宿主工具超时应大于该预算，并预留持久化及协议处理时间；并发调用还有锁等待时间。没有跨 MCP 锁或多设备队列。ADB 客户端可能自行启动未运行的 ADB daemon；服务不显式执行 `start-server` / `kill-server`，不修复其他服务。
 
@@ -60,50 +61,53 @@ uv pip compile pyproject.toml --extra dev --generate-hashes --output-file requir
 
 ### run_adb_shell
 
-执行一个固定目标上的只读查询。只传一个查询枚举：
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `query` | string，enum | 是 | 从下表 10 个选项中选择；没有默认值 |
+只接受一个完整指令字符串。输入必须与 `config.json` 的 `allowed_commands` 某项逐字符相同，才会执行。匹配前不去空格、不改大小写、不解析或规范化；未匹配时不启动任何 ADB 进程，也不创建输出记录。
 
 ```json
-{"query":"clientidbase"}
+{"command":"adb shell ifconfig"}
 ```
+
+白名单在配置里填写，修改后重启 MCP。示例配置保留此前 10 项查询，可按需要增减，不需要修改 Python 代码：
 
 ```json
-{"query":"features"}
+{
+  "allowed_commands": [
+    "adb shell getprop ro.com.google.clientidbase",
+    "adb shell getprop ro.boot.serialno",
+    "adb shell getprop ro.serialno",
+    "adb shell getprop ro.oem.key1",
+    "adb shell getprop ro.vendor.youtube.cert_scope",
+    "adb shell getprop persist.sys.test_harness",
+    "adb shell pm list features",
+    "adb shell settings get secure android_id",
+    "adb shell ifconfig",
+    "adb shell ip addr"
+  ]
+}
 ```
 
-```json
-{"query":"android_id"}
-```
+上面是配置字段片段；仍需保留 `target`、ADB 路径和其他现有设置。
 
-命令类别留在内部映射中，服务端根据 query 生成完整命令。仍只开放以下 5 类、10 项固定只读查询：
+| 输入（白名单只有 `adb shell ifconfig` 时） | 结果 |
+|---|---|
+| `adb shell ifconfig` | 允许 |
+| `adb shell ifconfig wlan0` | 拒绝 |
+| `adb shell IFCONFIG` | 拒绝 |
+| `adb  shell ifconfig` | 拒绝 |
+| `adb shell ifconfig `（尾部空格） | 拒绝 |
+| `adb shell ifconfig; reboot` | 拒绝 |
 
-| 内部类别 | query | 固定设备端命令 |
-|---|---|---|
-| getprop | clientidbase | `getprop ro.com.google.clientidbase` |
-| getprop | boot_serialno | `getprop ro.boot.serialno` |
-| getprop | serialno | `getprop ro.serialno` |
-| getprop | oem_key1 | `getprop ro.oem.key1` |
-| getprop | youtube_cert_scope | `getprop ro.vendor.youtube.cert_scope` |
-| getprop | test_harness_state | `getprop persist.sys.test_harness` |
-| pm | features | `pm list features` |
-| settings | android_id | `settings get secure android_id` |
-| ifconfig | interfaces | `ifconfig` |
-| ip | addresses | `ip addr` |
+白名单项必须以字面量 `adb shell ` 开头，后跟设备端程序及参数。配置校验拒绝控制字符、未闭合引号、Shell 运算符和替换字符（`; | & < >`、反引号、`$`）；不支持管道、重定向、变量展开或调用方的 ADB 选项。包含空格的参数可用 POSIX 引号填写，匹配仍比较原始字符串。配置中的额外空格会原样保留，调用方也必须完全匹配。
 
-调用方不再选择 command，也不能用属性名、键名、选项或 Shell 字符串影响执行。Operator Tier 和 Global Assist 都使用 `features`，从返回文本中查找 `com.google.android.tv` / `GLOBAL_ASSIST_TRIGGERING`；保存完整原始证据，不执行管道或 `grep`。
+只有命中后才解析预设指令；使用配置的 `adb_path` 和固定 `target`，逐参数 POSIX 引用生成设备端命令，本机使用 `create_subprocess_exec`，不启动本机 Shell。字面量 `adb` 不是调用方选择可执行文件的入口。
 
-`cmd testharness enable` 会恢复出厂，`am start -a android.settings.SETTINGS` 会打开界面，两类均不开放。全部属性查询、任意属性/设置键、`settings list` 和 `dumpsys display` 也不在权限范围内。一级命令分类不授予该类别下其他操作权限。
-
-枚举、固定映射及执行/历史读取策略集中在 `commands.py`。新增查询时补 `Query` 枚举、`COMMANDS` 映射、对应测试和文档；无需新增工具或类别参数，必须核对完整命令是否只读。本机使用 `create_subprocess_exec`，设备端命令逐参数 POSIX 引用；非 PTY 模式保留双流和原始行尾。
+**白名单是执行授权，不是自动判定只读的策略。** 服务不再硬编码属性或一级命令名单；添加指令前自行确认副作用。示例 10 项仍为查询，但配置可以授权修改设备的指令，因此执行工具不声明 `readOnlyHint=true`；历史读取工具继续声明只读。
 
 ### 文本输出
 
 正常、完整且无 stderr 或解码异常时，只返回一个文本块，内容等于 stdout 原文；不包裹 JSON，不 trim 或改写换行。成功但值为空时，文本为空且 `isError=false`，不冒充命令失败。
 
-例如输入 `{"query":"clientidbase"}`，调用方看到的文本可以是（示意值，实际由设备返回）：
+例如输入 `{"command":"adb shell getprop ro.com.google.clientidbase"}`，调用方看到的文本可以是（示意值，实际由设备返回）：
 
 ```text
 example_client_id
@@ -123,7 +127,7 @@ MCP 仍使用协议结果封装文本。上述示例对应：
 只有需要说明时才增加独立文本块：
 
 - stderr 非空：追加 `[stderr]` 文本块，保留其原文，与 stdout 分开。
-- 命令失败：`isError=true`，追加 `[adb_mcp]` 提示，含错误分类、退出码及简短说明；已取得的 stdout/stderr 仍保留。非法 query、缺失参数或类型错误由 SDK 拒绝，不执行 ADB。
+- 命令失败：`isError=true`，追加 `[adb_mcp]` 提示，含错误分类、退出码及简短说明；已取得的 stdout/stderr 仍保留。缺失参数或类型错误由 SDK 拒绝；不匹配白名单的 command 由服务端拒绝，不执行 ADB。
 - 输出预览截断：标明对应流已截断，并给出 `read_command_output` 的完整补读参数；`start_char` 从已显示的 Unicode 码点数开始。
 - 采集不完整或解码失败：明确标明 `capture_complete=false` / `decoding_errors=true`。补读只能取得已保存部分，不能恢复未采集的尾部。
 
@@ -153,9 +157,9 @@ stdout_truncated=true
 read_command_output {"output_id":"<32_HEX_RECORD_ID>","stream":"stdout","start_char":6000}
 ```
 
-设备、argv、时间、退出码、字节数、记录 ID 和完整性等元数据继续保存到本地 `record.json`，内部记录格式仍为 `adb-command/v1`。只有需要补读时才将 ID 和位置送入调用上下文。成功执行只代表取得事实，不判定 TAM 预期或 PASS/FAIL；空属性值加退出码 0 是成功事实。
+设备、argv、时间、退出码、字节数、记录 ID 和完整性等元数据继续保存到本地 `record.json`，内部记录格式仍为 `adb-command/v1`，新增可选 `command` 字段保存命中时的原始完整指令。只有需要补读时才将 ID 和位置送入调用上下文。成功执行只代表取得事实，不判定 TAM 预期或 PASS/FAIL；空属性值加退出码 0 是成功事实。
 
-**接口已精简**：旧 argv 请求必须改为 query；旧 command 字段无需再传。客户端应重启 MCP 并重新发现、绑定工具，且停止对返回文本做 JSON 解析或读取 structuredContent。FastMCP 对额外字段按 SDK 默认行为忽略，它们不参与命令生成。错误以协议 `isError` 和独立文本提示表示。
+**接口变更**：旧 `query` 请求必须改为完整 `command` 字符串。客户端应重启 MCP 并重新发现、绑定工具。配置省略 `allowed_commands` 时默认拒绝全部命令，不回退到旧固定名单。其他额外字段不参与命令生成。返回仍是原文及必要提示，没有 structuredContent 或输出 Schema。
 
 ### read_command_output
 
@@ -187,7 +191,7 @@ read_command_output {"output_id":"0123456789abcdef0123456789abcdef","stream":"st
 
 原命令失败、原采集不完整或解码异常仍明确提示。读取已保存的失败命令可以成功（`isError=false`，`source_error=...` 表示原命令错误）；非法 ID、读取越界、存储损坏等读取错误则标记 `isError=true`。偏移等于总字符数返回空文本；超过总字符数、负数、错误 stream 或超过读取上限均报错。
 
-每次读取先核对记录 argv 仍在当前只读名单内；旧宽权限记录报错，原文件保留。当前允许命令的历史记录仍可跨重启读取，无需迁移。只接受记录 ID，不能传路径，也不会重放设备命令。
+每次读取按当前配置白名单校验。新记录的完整 command 必须精确匹配，并与 argv 一致；旧记录没有 command 时按 argv 与当前白名单解析后的参数比较。不允许的记录报错，原文件保留；当前允许的旧记录跨重启可读，无需迁移。只接受记录 ID，不能传路径，也不会重放设备命令。
 
 ## 原始记录与生命周期
 
@@ -210,7 +214,7 @@ data/command-outputs/<output_id>/
 .venv/Scripts/python.exe -m pytest -q
 .venv/Scripts/ruff.exe check src tests scripts
 .venv/Scripts/ruff.exe format --check src tests scripts
-# 授权真机只读查询：
+# 授权按配置白名单进行真机验收（先核对每条指令的副作用）：
 .venv/Scripts/python.exe scripts/verify_device.py --config config.json --report data/device-validation.json
 ```
 

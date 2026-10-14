@@ -10,19 +10,19 @@
 
 ## 简化后的输入输出
 
-`adb_run_adb_shell` 只接受一个 query 枚举，例如：
+`adb_run_adb_shell` 只接受一个完整 command 字符串，例如：
 
 ```json
-{"query":"clientidbase"}
+{"command":"adb shell getprop ro.com.google.clientidbase"}
 ```
 
-一级命令类别由服务端固定映射决定。5 类、10 项白名单见 README；只读服务不开放 cmd / am。正常结果就是 stdout 原文，空值仍是成功结果；stderr、命令失败、截断及解码异常另有明确提示。工具结果没有 structuredContent 或输出 Schema，宿主不能再把文本当作 JSON 解析，也不能从 ToolMessage Artifact 获取命令元数据。
+输入必须与 config.json 的 allowed_commands 某项逐字符相同；大小写、空格、引号均参与匹配。省略或空名单时拒绝所有执行。示例保留此前 10 项查询，新增或移除指令只需修改配置并重启 MCP。名单授权不保证只读，执行工具不再声明 readOnlyHint=true。正常结果就是 stdout 原文，空值仍是成功结果；stderr、命令失败、截断及解码异常另有明确提示。工具结果没有 structuredContent 或输出 Schema，宿主不能再把文本当作 JSON 解析，也不能从 ToolMessage Artifact 获取命令元数据。
 
-宿主应重启 MCP 并重新发现、绑定新工具。短输出直接使用第一次返回；长输出的提示会提供 `read_command_output` 所需 ID、流和下一位置，其返回也以原文为主。分页每次核对当前命令策略，旧宽权限记录保留在磁盘但不可通过工具读取。
+宿主应重启 MCP 并重新发现、绑定新工具。短输出直接使用第一次返回；长输出的提示会提供 `read_command_output` 所需 ID、流和下一位置，其返回也以原文为主。分页每次核对当前命令策略，不在当前名单的记录保留在磁盘但不可通过工具读取。
 
 ## 本地记录与业务判断
 
-完整元数据仍保存在 MCP 的 `output_directory/<output_id>/record.json`，内部格式为 `adb-command/v1`，两条原始流也继续保存。元数据和历史文件未删除、未迁移；普通短结果不向模型暴露 output_id。
+完整元数据仍保存在 MCP 的 `output_directory/<output_id>/record.json`，内部格式为 `adb-command/v1`，两条原始流也继续保存。新记录增加可选 command 原文，已有仅含 argv 的记录按当前名单参数核对；元数据和历史文件未删除、未迁移；普通短结果不向模型暴露 output_id。
 
 P4 如需宿主 Artifact，仍需设计服务端记录的定位、原始流和元数据导入、run/task/step 关联。当前工具文本不承担这个归档接口，不把 MCP 记录 ID 当作宿主 artifact_id；本轮没有实现该链路。
 
@@ -50,6 +50,6 @@ P4 如需宿主 Artifact，仍需设计服务端记录的定位、原始流和�
 ../../.venv/Scripts/python.exe scripts/verify_host_adapter.py --config config.json --server-python .venv/Scripts/python.exe
 ```
 
-脚本使用公开 `load_mcp_tools`、真实 stdio 调用及 `convert_to_openai_messages`，核对工具前缀、success/error 状态和模型消息中的文本数量。成功模型消息直接保留 stdout 原文，错误消息保留 SDK 错误说明；二者没有命令元数据 Artifact。脚本核对成功文本与本地记录逐字符相同，非法查询未创建记录。
+脚本使用公开 `load_mcp_tools`、真实 stdio 调用及 `convert_to_openai_messages`，核对工具前缀、success/error 状态和模型消息中的文本数量。成功模型消息直接保留 stdout 原文，错误消息保留 SDK 错误说明；二者没有命令元数据 Artifact。脚本核对成功文本与本地记录逐字符相同，未匹配指令未创建记录。该脚本要求白名单包含示例 clientidbase 指令；本轮接口更改后未重新执行真机适配器验收。
 
 此验证到公开消息转换边界为止，没有调用 LLM、没有启动测试 Agent 原 case，也没有证明现有 Judge 已接受命令证据。

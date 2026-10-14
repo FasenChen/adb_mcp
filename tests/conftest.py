@@ -7,6 +7,19 @@ import pytest
 
 from adb_mcp.config import Config
 
+ALLOWED_COMMANDS = [
+    "adb shell getprop ro.com.google.clientidbase",
+    "adb shell getprop ro.boot.serialno",
+    "adb shell getprop ro.serialno",
+    "adb shell getprop ro.oem.key1",
+    "adb shell getprop ro.vendor.youtube.cert_scope",
+    "adb shell getprop persist.sys.test_harness",
+    "adb shell pm list features",
+    "adb shell settings get secure android_id",
+    "adb shell ifconfig",
+    "adb shell ip addr",
+]
+
 SIMULATOR = Path(__file__).with_name("fake_adb.py")
 
 
@@ -36,6 +49,7 @@ def fake_adb(monkeypatch, tmp_path):
 def config(tmp_path):
     return Config(
         adb_path="fake-adb",
+        allowed_commands=ALLOWED_COMMANDS.copy(),
         target={"serial": "test-device"},
         output_directory=tmp_path / "outputs",
         preview_max_chars_per_stream=20,

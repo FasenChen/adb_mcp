@@ -1,98 +1,55 @@
 import shlex
-from typing import get_args
 
 import pytest
+from conftest import ALLOWED_COMMANDS
 
-from adb_mcp.commands import (
-    COMMANDS,
-    CommandError,
-    Query,
-    resolve_query,
-    shell_command,
-    validate_command,
-)
+from adb_mcp.commands import CommandError, command_args, resolve_command, shell_command
 
 
-@pytest.mark.parametrize(
-    ("query", "argv"),
-    [
-        ("clientidbase", ["getprop", "ro.com.google.clientidbase"]),
-        ("boot_serialno", ["getprop", "ro.boot.serialno"]),
-        ("serialno", ["getprop", "ro.serialno"]),
-        ("oem_key1", ["getprop", "ro.oem.key1"]),
-        ("youtube_cert_scope", ["getprop", "ro.vendor.youtube.cert_scope"]),
-        ("test_harness_state", ["getprop", "persist.sys.test_harness"]),
-        ("features", ["pm", "list", "features"]),
-        ("android_id", ["settings", "get", "secure", "android_id"]),
-        ("interfaces", ["ifconfig"]),
-        ("addresses", ["ip", "addr"]),
-    ],
-)
-def test_allowed_commands_and_posix_quoting(query, argv):
-    resolved = resolve_query(query)
-    assert resolved == argv
-    assert validate_command(argv) == argv
+@pytest.mark.parametrize("command", ALLOWED_COMMANDS)
+def test_allowed_commands_and_posix_quoting(command):
+    argv = resolve_command(command, ALLOWED_COMMANDS)
+    assert argv == shlex.split(command)[2:]
     assert shlex.split(shell_command(argv)) == argv
-    resolved.append("extra")
-    assert resolve_query(query) == argv
-
-
-def test_enum_and_mapping_cover_same_queries():
-    assert set(get_args(Query)) == set(COMMANDS)
-
-
-@pytest.mark.parametrize("query", ["unknown", "getprop", "testharness_enable", "open_settings", ""])
-def test_unknown_query_is_rejected(query):
-    with pytest.raises(CommandError, match="unsupported query"):
-        resolve_query(query)
 
 
 @pytest.mark.parametrize(
-    "argv",
+    "command",
     [
-        [],
-        ["getprop"],
-        ["getprop", "vendor.new_property"],
-        ["settings", "list", "secure"],
-        ["settings", "get", "global", "device_name"],
-        ["settings", "get", "secure", "other_key"],
-        ["settings", "get", "system", "合法 空格'\"键😀"],
-        ["dumpsys", "display"],
-        ["pm", "list", "features", "|", "grep", "com.google.android.tv"],
-        ["pm", "list", "packages"],
-        ["pm", "clear", "com.example"],
-        ["ifconfig", "wlan0", "down"],
-        ["ip", "addr", "flush", "dev", "wlan0"],
-        ["cmd", "testharness", "enable"],
-        ["am", "start", "-a", "android.settings.SETTINGS"],
-        ["sh", "-c", "getprop"],
-        ["su", "0", "getprop"],
-        ["getprop", "x", "default"],
-        ["getprop", "--help"],
-        ["getprop", "a;b"],
-        ["getprop", "$(id)"],
-        ["getprop", "`id`"],
-        ["getprop", "a|id"],
-        ["getprop", "x\n"],
-        ["getprop", "x\x00"],
-        ["getprop", "x\u202e"],
-        ["settings", "put", "global", "x", "1"],
-        ["settings", "delete", "global", "x"],
-        ["settings", "get", "bad", "x"],
-        ["settings", "get", "system", ""],
-        ["settings", "get", "system", "--help"],
-        ["settings", "list", "secure", "extra"],
-        ["settings", "get", "global", "x&&id"],
-        ["dumpsys", "display", "set-brightness", "1"],
-        ["dumpsys", "battery", "reset"],
-        ["dumpsys", "display", "--proto"],
-        ["getprop", "a" * 4097],
-        ["getprop"] * 33,
-        [1],
-        "getprop",
+        "adb shell ifconfig ",
+        " adb shell ifconfig",
+        "adb  shell ifconfig",
+        "adb shell  ifconfig",
+        "adb shell IFCONFIG",
+        "adb shell 'ifconfig'",
+        "adb shell ifconfig\n",
+        "adb shell ifconfig\x00",
+        "adb shell ifconfig wlan0",
+        "adb shell ifconfig; reboot",
+        "adb shell ifconfig && reboot",
+        "adb shell pm list features | grep android",
+        "adb shell getprop $(id)",
+        "adb shell getprop vendor.new_property",
+        "adb -s other-device shell ifconfig",
+        "ifconfig",
+        "",
+        ["ifconfig"],
+        1,
     ],
 )
-def test_reject_before_submission(argv):
-    with pytest.raises(CommandError) as error:
-        validate_command(argv)
-    assert error.value.code == "invalid_command"
+def test_only_exact_configured_strings_are_accepted(command):
+    with pytest.raises(CommandError, match="exactly match"):
+        resolve_command(command, ALLOWED_COMMANDS)
+
+
+def test_whitelist_controls_commands_without_code_mapping():
+    command = "adb shell getprop vendor.new_property"
+    assert resolve_command(command, [command]) == ["getprop", "vendor.new_property"]
+    assert resolve_command("adb shell  ifconfig ", ["adb shell  ifconfig "]) == ["ifconfig"]
+
+
+def test_configured_quoted_argument_is_preserved():
+    command = "adb shell settings get system 'key with spaces'"
+    argv = command_args(command)
+    assert argv == ["settings", "get", "system", "key with spaces"]
+    assert shlex.split(shell_command(argv)) == argv
